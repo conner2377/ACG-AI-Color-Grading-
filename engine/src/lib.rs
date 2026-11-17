@@ -4,6 +4,7 @@
 //! (pure parameters), so presets, auto-grading, reference matching and AI
 //! requests all produce recipes that apply losslessly at full resolution.
 
+pub mod adapt;
 pub mod analysis;
 pub mod color;
 pub mod ffi;

@@ -169,6 +169,29 @@ pub unsafe extern "C" fn acg_auto_candidates(s: *const Session) -> *mut c_char {
     out_string(serde_json::json!({ "stats": stats, "candidates": cands }).to_string())
 }
 
+/// Fit a look to this photo (see `adapt`). `base_json` is the edit the look is layered
+/// on (normally the auto baseline + the user's geometry). Returns
+/// `{"recipe": …, "report": {"strength", "change", "notes"}}`.
+/// # Safety
+/// `s` live; strings valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn acg_adapt_look(s: *const Session, base_json: *const c_char, look_json: *const c_char) -> *mut c_char {
+    let s = &*s;
+    let base = match parse_recipe(base_json) { Ok(r) => r, Err(e) => { set_error(e); return std::ptr::null_mut() } };
+    let look = match parse_recipe(look_json) { Ok(r) => r, Err(e) => { set_error(e); return std::ptr::null_mut() } };
+    let stats = analysis::analyze(&s.preview);
+    // Geometry changes framing only; measure on the framed preview.
+    let framed = if base.has_geometry() { crate::pipeline::geometry(&base, &s.preview) } else { s.preview.clone() };
+    let geo_free = Recipe { angle: 0.0, rotate90: 0, flip_h: false, flip_v: false, crop: None, ..base.clone() };
+    let (mut r, rep) = crate::adapt::adapt(&look, &geo_free, &stats, &framed);
+    r.angle = base.angle;
+    r.rotate90 = base.rotate90;
+    r.flip_h = base.flip_h;
+    r.flip_v = base.flip_v;
+    r.crop = base.crop;
+    out_string(serde_json::json!({ "recipe": r, "report": rep }).to_string())
+}
+
 /// JSON array of built-in templates.
 #[unsafe(no_mangle)]
 pub extern "C" fn acg_presets() -> *mut c_char {

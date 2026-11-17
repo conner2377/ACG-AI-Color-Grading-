@@ -233,7 +233,13 @@ pub fn candidates(img: &Image) -> (Stats, Vec<Recipe>) {
     let mut out = vec![base.clone()];
     for name in presets::suggestions(s.scene) {
         if let Some(st) = presets::by_name(name) {
-            out.push(base.layered(&st));
+            // Each look is fitted to this photo, not pasted on top of it.
+            let (r, rep) = crate::adapt::adapt(&st, &base, &s, img);
+            let mut r = r;
+            if !rep.notes.is_empty() {
+                r.description = format!("{} · 자동 맞춤 {}%", r.description, (rep.strength * 100.0).round() as i32);
+            }
+            out.push(r);
         }
     }
     (s, out)

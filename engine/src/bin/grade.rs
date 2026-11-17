@@ -43,8 +43,16 @@ fn main() -> Result<()> {
             let base = analysis::auto_correct(&analysis::analyze(&img));
             io::save(&apply(&Recipe::default(), &img), dir.join("_원본.jpg"), io::Format::Jpeg(92))?;
             io::save(&apply(&base, &img), dir.join("_자동보정.jpg"), io::Format::Jpeg(92))?;
+            let stats = analysis::analyze(&img);
+            let adapt = std::env::var("ACG_ADAPT").is_ok();
             for r in presets::all() {
-                let r = base.layered(&r);
+                let r = if adapt {
+                    let (r, rep) = photo_grade_engine::adapt::adapt(&r, &base, &stats, &img);
+                    println!("{}\t{:.0}%\t{}", r.name, rep.strength * 100.0, rep.notes.join(" / "));
+                    r
+                } else {
+                    base.layered(&r)
+                };
                 io::save(&apply(&r, &img), dir.join(format!("{}.jpg", r.name.replace(' ', "_"))), io::Format::Jpeg(92))?;
             }
         }
