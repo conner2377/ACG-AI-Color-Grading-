@@ -1,0 +1,23 @@
+[package]
+name = "photo-grade-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff"] }
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[lib]
+name = "photo_grade_engine"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "grade"
+path = "src/bin/grade.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
