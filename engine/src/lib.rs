@@ -6,6 +6,7 @@
 
 pub mod analysis;
 pub mod color;
+pub mod ffi;
 pub mod io;
 pub mod lut;
 pub mod matching;
