@@ -3,7 +3,7 @@
 use rayon::prelude::*;
 
 use crate::color::*;
-use crate::recipe::{Recipe, HSL_BAND_CENTERS};
+use crate::recipe::Recipe;
 
 /// An RGB float image. Pixel encoding (linear vs display) depends on context:
 /// pipeline input is linear sRGB, pipeline output is display sRGB (gamma-encoded).
@@ -204,14 +204,215 @@ fn hash(x: u32, y: u32) -> f32 {
     (h & 0xffff) as f32 / 65535.0
 }
 
+/// Smooth value noise for grain with adjustable size.
+#[inline]
+fn value_noise(x: f32, y: f32) -> f32 {
+    let (xi, yi) = (x.floor(), y.floor());
+    let (fx, fy) = (x - xi, y - yi);
+    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let (xi, yi) = (xi as i32 as u32, yi as i32 as u32);
+    let a = hash(xi, yi);
+    let b = hash(xi.wrapping_add(1), yi);
+    let c = hash(xi, yi.wrapping_add(1));
+    let d = hash(xi.wrapping_add(1), yi.wrapping_add(1));
+    let top = a + (b - a) * sx;
+    let bot = c + (d - c) * sx;
+    top + (bot - top) * sy
+}
+
 fn shoulder(x: f32) -> f32 {
     // Gentle highlight roll-off for values above 0.9 (recovers RAW/overexposed data).
     const K: f32 = 0.9;
     if x <= K { x } else { K + (1.0 - K) * ((x - K) / (1.0 - K)).tanh() }
 }
 
+// ---------------------------------------------------------------- geometry
+
+fn rotate90(img: &Image, turns: u8) -> Image {
+    let (w, h) = (img.width, img.height);
+    match turns % 4 {
+        0 => img.clone(),
+        2 => Image { width: w, height: h, data: img.data.iter().rev().copied().collect() },
+        t => {
+            let mut out = Image::new(h, w);
+            out.data.par_chunks_mut(h).enumerate().for_each(|(y, row)| {
+                for (x, px) in row.iter_mut().enumerate() {
+                    // out is h wide, w tall.
+                    let (sx, sy) = if t == 1 { (y, h - 1 - x) } else { (w - 1 - y, x) };
+                    *px = img.data[sy * w + sx];
+                }
+            });
+            out
+        }
+    }
+}
+
+fn flip(img: &mut Image, h: bool, v: bool) {
+    let w = img.width;
+    if h {
+        img.data.par_chunks_mut(w).for_each(|row| row.reverse());
+    }
+    if v {
+        let rows: Vec<Vec<Rgb>> = img.data.chunks(w).rev().map(|r| r.to_vec()).collect();
+        img.data = rows.concat();
+    }
+}
+
+/// Zoom factor that keeps a rotated frame free of empty corners.
+pub fn straighten_scale(w: f32, h: f32, angle_deg: f32) -> f32 {
+    let t = angle_deg.to_radians().abs();
+    let (c, s) = (t.cos(), t.sin());
+    (w / (w * c + h * s)).min(h / (w * s + h * c))
+}
+
+#[inline]
+fn bilinear(img: &Image, x: f32, y: f32) -> Rgb {
+    let x = x.clamp(0.0, (img.width - 1) as f32);
+    let y = y.clamp(0.0, (img.height - 1) as f32);
+    let (x0, y0) = (x as usize, y as usize);
+    let (x1, y1) = ((x0 + 1).min(img.width - 1), (y0 + 1).min(img.height - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let p = |xx: usize, yy: usize| img.data[yy * img.width + xx];
+    let (a, b, c, d) = (p(x0, y0), p(x1, y0), p(x0, y1), p(x1, y1));
+    let mut o = [0.0; 3];
+    for k in 0..3 {
+        let top = a[k] + (b[k] - a[k]) * fx;
+        let bot = c[k] + (d[k] - c[k]) * fx;
+        o[k] = top + (bot - top) * fy;
+    }
+    o
+}
+
+/// Apply crop / straighten / rotate / flip. Plain crops, flips and quarter turns copy
+/// pixels exactly; only straightening resamples (bilinear).
+pub fn geometry(r: &Recipe, input: &Image) -> Image {
+    let mut img = rotate90(input, r.rotate90);
+    flip(&mut img, r.flip_h, r.flip_v);
+    let (w, h) = (img.width as f32, img.height as f32);
+    let [cx, cy, cw, ch] = r.crop.unwrap_or([0.0, 0.0, 1.0, 1.0]).map(|v| v.clamp(0.0, 1.0));
+    let cw = cw.clamp(0.01, 1.0 - cx);
+    let ch = ch.clamp(0.01, 1.0 - cy);
+    let ow = ((cw * w).round() as usize).max(1);
+    let oh = ((ch * h).round() as usize).max(1);
+    if r.angle.abs() < 1e-3 {
+        let x0 = (cx * w).round() as usize;
+        let y0 = (cy * h).round() as usize;
+        let ow = ow.min(img.width - x0.min(img.width - 1));
+        let oh = oh.min(img.height - y0.min(img.height - 1));
+        if x0 == 0 && y0 == 0 && ow == img.width && oh == img.height {
+            return img;
+        }
+        let mut out = Image::new(ow, oh);
+        out.data.par_chunks_mut(ow).enumerate().for_each(|(y, row)| {
+            let s = (y0 + y) * img.width + x0;
+            row.copy_from_slice(&img.data[s..s + ow]);
+        });
+        return out;
+    }
+    let s = straighten_scale(w, h, r.angle);
+    let (sin, cos) = r.angle.to_radians().sin_cos();
+    let mut out = Image::new(ow, oh);
+    out.data.par_chunks_mut(ow).enumerate().for_each(|(y, row)| {
+        for (x, px) in row.iter_mut().enumerate() {
+            let nx = cx + (x as f32 + 0.5) / ow as f32 * cw - 0.5;
+            let ny = cy + (y as f32 + 0.5) / oh as f32 * ch - 0.5;
+            let (gx, gy) = (nx * w * s, ny * h * s);
+            let sx = gx * cos - gy * sin + w * 0.5 - 0.5;
+            let sy = gx * sin + gy * cos + h * 0.5 - 0.5;
+            *px = bilinear(&img, sx, sy);
+        }
+    });
+    out
+}
+
+// ---------------------------------------------------------------- color helpers
+
+/// Calibration: rotate/saturate each RGB primary (like Lightroom's Calibration panel),
+/// then renormalize so neutrals stay neutral.
+fn calibration_matrix(r: &Recipe) -> Option<[[f32; 3]; 3]> {
+    let hs = [
+        (r.cal_red_hue, r.cal_red_sat),
+        (r.cal_green_hue, r.cal_green_sat),
+        (r.cal_blue_hue, r.cal_blue_sat),
+    ];
+    if hs.iter().all(|&(h, s)| h == 0.0 && s == 0.0) {
+        return None;
+    }
+    let mut cols = [[0.0f32; 3]; 3];
+    for (j, &(hue, sat)) in hs.iter().enumerate() {
+        let mut e = [0.0f32; 3];
+        e[j] = 1.0;
+        let lab = linear_to_oklab(e);
+        let ang = (hue * 30.0).to_radians();
+        let (sn, cs) = ang.sin_cos();
+        let k = (1.0 + sat * 0.6).max(0.0);
+        let a = (lab[1] * cs - lab[2] * sn) * k;
+        let b = (lab[1] * sn + lab[2] * cs) * k;
+        cols[j] = oklab_to_linear([lab[0], a, b]);
+    }
+    let mut m = [[0.0f32; 3]; 3];
+    for i in 0..3 {
+        let sum: f32 = (0..3).map(|j| cols[j][i]).sum();
+        for j in 0..3 {
+            m[i][j] = cols[j][i] / sum.max(1e-3);
+        }
+    }
+    Some(m)
+}
+
+fn mat_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut m = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            m[i][j] = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    m
+}
+
+#[inline]
+fn apply_mat(m: &[[f32; 3]; 3], c: Rgb) -> Rgb {
+    [
+        m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+        m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+        m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+    ]
+}
+
+/// OKLab hue (deg) centers of the 8 HSL bands: red, orange, yellow, green, aqua, blue, purple, magenta.
+const OK_BAND_HUES: [f32; 8] = [25.0, 55.0, 100.0, 140.0, 195.0, 255.0, 300.0, 340.0];
+
+/// Weights of the two bands surrounding hue `h` (piecewise linear, sums to 1).
+#[inline]
+fn band_weights(h: f32) -> [(usize, f32); 2] {
+    for i in 0..8 {
+        let a = OK_BAND_HUES[i];
+        let b = if i == 7 { OK_BAND_HUES[0] + 360.0 } else { OK_BAND_HUES[i + 1] };
+        let hh = if h < OK_BAND_HUES[0] { h + 360.0 } else { h };
+        if hh >= a && hh < b {
+            let t = (hh - a) / (b - a);
+            let t = t * t * (3.0 - 2.0 * t);
+            return [(i, 1.0 - t), ((i + 1) % 8, t)];
+        }
+    }
+    [(0, 1.0), (1, 0.0)]
+}
+
+// ---------------------------------------------------------------- main pipeline
+
 /// Apply a recipe to a linear image, returning a display-encoded image in 0..1.
+///
+/// Color science: exposure, white balance, calibration and mixing happen in linear light;
+/// tone, saturation, hue and grading happen in OKLab so lightness and color don't bleed
+/// into each other; skin tones get only part of the styling (`skin_protect`).
 pub fn apply(r: &Recipe, input: &Image) -> Image {
+    let geo;
+    let input = if r.has_geometry() {
+        geo = geometry(r, input);
+        &geo
+    } else {
+        input
+    };
     let (w, h) = (input.width, input.height);
     let tone = tone_lut(r, 4096);
     let curve = curve_lut(&r.curve, 1024);
@@ -219,27 +420,28 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
 
     // White balance as channel gains, normalized to keep luminance.
     let mut wb = [
-        2f32.powf(r.temperature * 0.35),
-        2f32.powf(-r.tint * 0.25),
-        2f32.powf(-r.temperature * 0.35),
+        2f32.powf(r.temperature * 0.45),
+        2f32.powf(-r.tint * 0.3),
+        2f32.powf(-r.temperature * 0.45),
     ];
     let wl = luma(wb);
     wb = [wb[0] / wl, wb[1] / wl, wb[2] / wl];
     let gain = 2f32.powf(r.exposure);
     let haze = r.dehaze * 0.06;
+    let matrix = match (r.channel_mixer, calibration_matrix(r)) {
+        (Some(m), Some(c)) => Some(mat_mul(m, c)),
+        (Some(m), None) => Some(m),
+        (None, c) => c,
+    };
 
-    // Stage 1: linear-light ops and display encoding.
-    let mut out: Vec<Rgb> = input
+    // Stage 1: linear light.
+    let mut lin: Vec<Rgb> = input
         .data
         .par_iter()
         .map(|&p| {
             let mut c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
-            if let Some(m) = r.channel_mixer {
-                c = [
-                    m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
-                    m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
-                    m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
-                ];
+            if let Some(m) = &matrix {
+                c = apply_mat(m, c);
             }
             if r.monochrome {
                 let y = luma(c);
@@ -250,120 +452,184 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
                 if haze != 0.0 {
                     *v = (*v - haze) / (1.0 - haze);
                 }
-                *v = linear_to_srgb(shoulder(v.max(0.0)));
+                *v = v.max(0.0);
             }
             c
         })
         .collect();
 
-    // Stage 2: local contrast (clarity) on display luminance.
-    if r.clarity != 0.0 || r.dehaze != 0.0 {
+    // Film halation / bloom: glow from highlights, computed in linear light.
+    if r.halation > 0.0 || r.bloom > 0.0 {
+        let hi: Vec<f32> = lin.par_iter().map(|&c| (luma(c) - 0.6).max(0.0)).collect();
+        let radius = (w.max(h) / 70).max(2);
+        let glow = blur(&hi, w, h, radius);
+        let wide = if r.bloom > 0.0 { blur(&hi, w, h, radius * 3) } else { Vec::new() };
+        lin.par_iter_mut().enumerate().for_each(|(i, c)| {
+            if r.halation > 0.0 {
+                let g = glow[i] * r.halation * 2.5;
+                c[0] += g;
+                c[1] += g * 0.32;
+                c[2] += g * 0.12;
+            }
+            if r.bloom > 0.0 {
+                let g = wide[i] * r.bloom * 1.8;
+                c[0] += g;
+                c[1] += g * 0.95;
+                c[2] += g * 0.88;
+            }
+        });
+    }
+
+    // Encode to display space (with highlight roll-off).
+    let mut out: Vec<Rgb> = lin
+        .par_iter()
+        .map(|c| c.map(|v| linear_to_srgb(shoulder(v))))
+        .collect();
+    drop(lin);
+
+    // Stage 2: local ops on display luminance (noise reduction, texture, clarity).
+    if r.noise_reduction > 0.0 || r.color_noise_reduction > 0.0 {
         let lum: Vec<f32> = out.par_iter().map(|&c| luma(c)).collect();
-        let radius = (w.max(h) / 60).max(2);
-        let base = blur(&lum, w, h, radius);
+        if r.noise_reduction > 0.0 {
+            let base = blur(&lum, w, h, 1 + (r.noise_reduction * 2.0) as usize);
+            let thr = 0.02 + 0.06 * r.noise_reduction;
+            out.par_iter_mut().zip(lum.par_iter().zip(base.par_iter())).for_each(|(c, (&l, &b))| {
+                let d = l - b;
+                let wgt = (-(d / thr).powi(2)).exp() * r.noise_reduction;
+                for v in c.iter_mut() {
+                    *v -= d * wgt;
+                }
+            });
+        }
+        if r.color_noise_reduction > 0.0 {
+            let rad = (w.max(h) / 300).max(2);
+            let ch: Vec<[f32; 2]> = out.par_iter().map(|&c| { let y = luma(c); [c[0] - y, c[2] - y] }).collect();
+            let cr = blur(&ch.iter().map(|v| v[0]).collect::<Vec<_>>(), w, h, rad);
+            let cb = blur(&ch.iter().map(|v| v[1]).collect::<Vec<_>>(), w, h, rad);
+            let k = r.color_noise_reduction;
+            out.par_iter_mut().enumerate().for_each(|(i, c)| {
+                let y = luma(*c);
+                let r0 = c[0] - y + (cr[i] - (c[0] - y)) * k;
+                let b0 = c[2] - y + (cb[i] - (c[2] - y)) * k;
+                // Solve G from luma so brightness is kept.
+                let g0 = -(0.2126 * r0 + 0.0722 * b0) / 0.7152;
+                *c = [y + r0, y + g0, y + b0];
+            });
+        }
+    }
+    if r.clarity != 0.0 || r.dehaze != 0.0 || r.texture != 0.0 {
+        let lum: Vec<f32> = out.par_iter().map(|&c| luma(c)).collect();
+        let big = if r.clarity != 0.0 || r.dehaze != 0.0 { blur(&lum, w, h, (w.max(h) / 60).max(2)) } else { Vec::new() };
+        let small = if r.texture != 0.0 { blur(&lum, w, h, (w.max(h) / 500).max(1)) } else { Vec::new() };
         let amt = r.clarity * 0.8 + r.dehaze * 0.3;
-        out.par_iter_mut().zip(lum.par_iter().zip(base.par_iter())).for_each(|(c, (&l, &b))| {
-            let mid = 1.0 - (2.0 * l - 1.0).powi(2);
-            let d = (l - b) * amt * mid;
+        out.par_iter_mut().enumerate().for_each(|(i, c)| {
+            let l = lum[i];
+            let mut d = 0.0;
+            if !big.is_empty() {
+                let mid = 1.0 - (2.0 * l - 1.0).powi(2);
+                d += (l - big[i]) * amt * mid;
+            }
+            if !small.is_empty() {
+                d += (l - small[i]) * r.texture * 1.2;
+            }
             for v in c.iter_mut() {
                 *v += d;
             }
         });
     }
 
-    // Stage 3: tone, color and grading (point ops in display space).
+    // Stage 3: tone & color in OKLab.
     let hsl_active = r.hsl.iter().any(|b| *b != Default::default());
-    let tints = [
-        hue_tint(r.grade_shadows.hue),
-        hue_tint(r.grade_midtones.hue),
-        hue_tint(r.grade_highlights.hue),
-    ];
+    let grade_dirs: Vec<(f32, f32, f32)> = [r.grade_shadows, r.grade_midtones, r.grade_highlights]
+        .iter()
+        .map(|w| {
+            let a = hsl_hue_to_oklab_hue(w.hue).to_radians();
+            (a.cos(), a.sin(), w.sat.clamp(0.0, 1.5))
+        })
+        .collect();
+    let grading = grade_dirs.iter().any(|d| d.2 > 0.0);
     let fade = r.fade * 0.12;
     let diag = ((w * w + h * h) as f32).sqrt() * 0.5;
-    let lut_s = r.lut_strength.clamp(0.0, 1.0);
+    let lut_s = r.lut_strength.clamp(0.0, 1.5);
     let sat_boost = if r.dehaze > 0.0 { r.dehaze * 0.15 } else { r.dehaze * 0.3 };
+    let skin_k = r.skin_protect.clamp(0.0, 1.0);
+    let balance = r.grade_balance.clamp(-1.0, 1.0) * 0.25;
 
     out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         for (x, c) in row.iter_mut().enumerate() {
-            let mut p = *c;
-            for v in p.iter_mut() {
-                *v = lookup(&tone, *v);
-            }
-            if let Some(l) = &curve {
-                for v in p.iter_mut() {
-                    *v = lookup(l, *v);
-                }
-            }
-            for k in 0..3 {
-                if let Some(l) = &curves_rgb[k] {
-                    p[k] = lookup(l, p[k]);
-                }
-            }
+            let disp = c.map(|v| v.clamp(0.0, 1.0));
+            let lab0 = linear_to_oklab(disp.map(srgb_to_linear));
+            let skin = if skin_k > 0.0 { skin_weight(lab0) * skin_k } else { 0.0 };
 
-            // Saturation & vibrance.
-            let yl = luma(p);
-            let cur_sat = {
-                let mx = p[0].max(p[1]).max(p[2]);
-                let mn = p[0].min(p[1]).min(p[2]);
-                if mx > 1e-5 { (mx - mn) / mx } else { 0.0 }
-            };
-            let vib = r.vibrance * (1.0 - cur_sat).powi(2);
-            let s = (1.0 + r.saturation + vib + sat_boost).max(0.0);
-            for v in p.iter_mut() {
-                *v = yl + (*v - yl) * s;
+            // Tone on OKLab lightness; chroma follows so saturation stays consistent.
+            let l0 = lab0[0].clamp(0.0, 1.0);
+            let mut l1 = lookup(&tone, l0);
+            if let Some(cv) = &curve {
+                l1 = lookup(cv, l1);
             }
-
-            if hsl_active {
-                let mut hsl = rgb_to_hsl([p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0), p[2].clamp(0.0, 1.0)]);
-                if hsl[1] > 1e-4 {
-                    let (mut dh, mut ds, mut dl, mut wsum) = (0.0, 0.0, 0.0, 0.0);
-                    for (i, band) in r.hsl.iter().enumerate() {
-                        let mut d = (hsl[0] - HSL_BAND_CENTERS[i]).abs();
-                        if d > 180.0 { d = 360.0 - d; }
-                        let wgt = (1.0 - d / 45.0).max(0.0);
-                        if wgt > 0.0 {
-                            let wgt = wgt * wgt * (3.0 - 2.0 * wgt);
-                            dh += band.hue * wgt;
-                            ds += band.sat * wgt;
-                            dl += band.lum * wgt;
-                            wsum += wgt;
-                        }
-                    }
-                    if wsum > 0.0 {
-                        let norm = 1.0 / wsum.max(1.0);
-                        hsl[0] += dh * norm;
-                        let sw = hsl[1];
-                        hsl[1] = (hsl[1] * (1.0 + ds * norm)).clamp(0.0, 1.0);
-                        hsl[2] = (hsl[2] * (1.0 + dl * norm * 0.5 * sw)).clamp(0.0, 1.0);
-                        p = hsl_to_rgb(hsl);
-                    }
-                }
-            }
-
-            // Color grading wheels.
-            let yl = luma(p).clamp(0.0, 1.0);
-            let masks = [(1.0 - yl).powi(2), 4.0 * yl * (1.0 - yl), yl * yl];
-            let sats = [r.grade_shadows.sat, r.grade_midtones.sat, r.grade_highlights.sat];
-            for k in 0..3 {
-                if sats[k] > 0.0 {
-                    let a = sats[k] * 0.25 * masks[k];
-                    for i in 0..3 {
-                        p[i] += tints[k][i] * a;
-                    }
-                }
-            }
-
             if fade > 0.0 {
-                for v in p.iter_mut() {
-                    let cv = v.clamp(0.0, 1.0);
-                    *v = cv + fade * (1.0 - cv).powi(2);
+                l1 += fade * (1.0 - l1).powi(2);
+            }
+            let ratio = ((l1 + 0.02) / (l0 + 0.02)).clamp(0.3, 3.0).powf(0.8);
+            let (mut a, mut b) = (lab0[1] * ratio, lab0[2] * ratio);
+            let toned = [l1, a, b];
+
+            // Saturation / vibrance (vibrance favors muted colors and spares skin).
+            let chroma = (a * a + b * b).sqrt();
+            let vib = r.vibrance * (1.0 - (chroma / 0.2).min(1.0)) * (1.0 - skin * 0.8);
+            let s = (1.0 + r.saturation + vib + sat_boost).max(0.0);
+            a *= s;
+            b *= s;
+            let mut l = l1;
+
+            if hsl_active && chroma > 1e-4 {
+                let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
+                let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
+                for (i, wgt) in band_weights(hue) {
+                    dh += r.hsl[i].hue * wgt;
+                    ds += r.hsl[i].sat * wgt;
+                    dl += r.hsl[i].lum * wgt;
+                }
+                let cc = (a * a + b * b).sqrt() * (1.0 + ds).max(0.0);
+                let nh = (hue + dh * 0.8).to_radians();
+                a = cc * nh.cos();
+                b = cc * nh.sin();
+                l = (l + dl * 0.12 * (chroma / 0.12).min(1.0)).clamp(0.0, 1.0);
+            }
+
+            if grading {
+                let t = (l - balance).clamp(0.0, 1.0);
+                let masks = [(1.0 - t).powi(2), 4.0 * t * (1.0 - t), t * t];
+                for k in 0..3 {
+                    let (dx, dy, sat) = grade_dirs[k];
+                    if sat > 0.0 {
+                        let m = sat * 0.06 * masks[k];
+                        a += dx * m;
+                        b += dy * m;
+                    }
+                }
+            }
+
+            // Skin protection: blend styled color back toward the tone-only result.
+            if skin > 0.0 {
+                l += (toned[0] - l) * skin;
+                a += (toned[1] - a) * skin;
+                b += (toned[2] - b) * skin;
+            }
+
+            let mut p = oklab_to_linear_gamut([l, a, b]).map(linear_to_srgb);
+
+            for k in 0..3 {
+                if let Some(cl) = &curves_rgb[k] {
+                    p[k] = lookup(cl, p[k]);
                 }
             }
 
             if let Some(lut) = &r.lut {
                 let q = lut.sample(p);
+                let s = lut_s * (1.0 - skin * 0.6);
                 for i in 0..3 {
-                    p[i] += (q[i] - p[i]) * lut_s;
+                    p[i] += (q[i] - p[i]) * s;
                 }
             }
 
@@ -371,17 +637,13 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
                 let dx = x as f32 - w as f32 * 0.5;
                 let dy = y as f32 - h as f32 * 0.5;
                 let rr = (dx * dx + dy * dy).sqrt() / diag;
-                let m = smoothstep(0.35, 1.05, rr);
-                let f = 1.0 + r.vignette * 0.8 * m;
+                let m = smoothstep(0.3, 1.1, rr);
                 for v in p.iter_mut() {
-                    *v = if r.vignette < 0.0 { *v * f } else { *v + (1.0 - *v) * r.vignette * 0.8 * m };
+                    *v = if r.vignette < 0.0 { *v * (1.0 + r.vignette * 0.85 * m) } else { *v + (1.0 - *v) * r.vignette * 0.8 * m };
                 }
             }
 
-            for v in p.iter_mut() {
-                *v = v.clamp(0.0, 1.0);
-            }
-            *c = p;
+            *c = p.map(|v| v.clamp(0.0, 1.0));
         }
     });
 
@@ -398,10 +660,12 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
         });
     }
     if r.grain > 0.0 {
-        let amt = r.grain * 0.08;
+        let amt = r.grain * 0.09;
+        // Grain size is relative to image size so previews and exports match.
+        let cell = (1.0 + r.grain_size.clamp(0.0, 1.0) * 3.0) * (w.max(h) as f32 / 2000.0).max(0.5);
         out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
             for (x, c) in row.iter_mut().enumerate() {
-                let n = (hash(x as u32, y as u32) - 0.5) * amt;
+                let n = (value_noise(x as f32 / cell, y as f32 / cell) - 0.5) * 2.0 * amt;
                 let yl = luma(*c);
                 let m = 4.0 * yl * (1.0 - yl) * 0.7 + 0.3;
                 for v in c.iter_mut() {

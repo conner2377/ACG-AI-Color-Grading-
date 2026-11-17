@@ -35,6 +35,20 @@ pub struct ToneWheel {
 #[serde(default)]
 pub struct Recipe {
     pub name: String,
+    /// Template category shown in the UI (e.g. "필름", "시네마틱").
+    pub category: String,
+    /// Short description of the look.
+    pub description: String,
+
+    // --- Geometry (applied first, lossless for 90° turns/flips/plain crops) ---
+    /// Straighten angle in degrees (-45..45). The image is zoomed to avoid empty corners.
+    pub angle: f32,
+    /// Quarter turns clockwise (0..3).
+    pub rotate90: u8,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    /// Crop rectangle [x, y, w, h] normalized to the rotated frame. None = full frame.
+    pub crop: Option<[f32; 4]>,
 
     // --- Light ---
     /// Exposure in stops (-5..5).
@@ -55,7 +69,17 @@ pub struct Recipe {
     pub saturation: f32,
     pub hsl: [HslBand; 8],
 
+    // --- Calibration: primary hue/saturation shifts (-1..1), like Lightroom's Calibration panel ---
+    pub cal_red_hue: f32,
+    pub cal_red_sat: f32,
+    pub cal_green_hue: f32,
+    pub cal_green_sat: f32,
+    pub cal_blue_hue: f32,
+    pub cal_blue_sat: f32,
+
     // --- Effects / detail ---
+    /// Fine detail contrast (-1..1).
+    pub texture: f32,
     pub clarity: f32,
     pub dehaze: f32,
     /// Sharpen amount (0..1).
@@ -64,11 +88,25 @@ pub struct Recipe {
     pub vignette: f32,
     /// Film grain (0..1).
     pub grain: f32,
+    /// Grain size (0 fine .. 1 coarse).
+    pub grain_size: f32,
+    /// Luminance noise reduction (0..1).
+    pub noise_reduction: f32,
+    /// Color noise reduction (0..1).
+    pub color_noise_reduction: f32,
+    /// Film halation: red-orange glow around bright highlights (0..1).
+    pub halation: f32,
+    /// Soft dreamy glow from highlights (0..1).
+    pub bloom: f32,
+    /// How much of the color styling is held back on skin tones (0 = none, 1 = full).
+    pub skin_protect: f32,
 
     // --- Grading ---
     pub grade_shadows: ToneWheel,
     pub grade_midtones: ToneWheel,
     pub grade_highlights: ToneWheel,
+    /// Shifts the split between shadow and highlight grading (-1..1).
+    pub grade_balance: f32,
     /// Faded/matte blacks (0..1): lifts the black point.
     pub fade: f32,
 
@@ -95,6 +133,27 @@ impl Default for Recipe {
     fn default() -> Self {
         Self {
             name: String::new(),
+            category: String::new(),
+            description: String::new(),
+            angle: 0.0,
+            rotate90: 0,
+            flip_h: false,
+            flip_v: false,
+            crop: None,
+            cal_red_hue: 0.0,
+            cal_red_sat: 0.0,
+            cal_green_hue: 0.0,
+            cal_green_sat: 0.0,
+            cal_blue_hue: 0.0,
+            cal_blue_sat: 0.0,
+            texture: 0.0,
+            grain_size: 0.3,
+            noise_reduction: 0.0,
+            color_noise_reduction: 0.0,
+            grade_balance: 0.0,
+            halation: 0.0,
+            bloom: 0.0,
+            skin_protect: 0.6,
             exposure: 0.0,
             contrast: 0.0,
             highlights: 0.0,
@@ -132,6 +191,11 @@ impl Recipe {
         Self { name: name.to_string(), ..Default::default() }
     }
 
+    /// The geometry part only is non-identity.
+    pub fn has_geometry(&self) -> bool {
+        self.angle != 0.0 || self.rotate90 % 4 != 0 || self.flip_h || self.flip_v || self.crop.is_some()
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("recipe serializes")
     }
@@ -147,7 +211,13 @@ impl Recipe {
         r.name = style.name.clone();
         macro_rules! add { ($($f:ident),*) => { $( r.$f = self.$f + style.$f; )* } }
         add!(exposure, contrast, highlights, shadows, whites, blacks, temperature, tint,
-             vibrance, saturation, clarity, dehaze, sharpen, vignette, grain, fade);
+             vibrance, saturation, clarity, dehaze, sharpen, vignette, grain, fade,
+             texture, noise_reduction, color_noise_reduction, grade_balance, halation, bloom,
+             cal_red_hue, cal_red_sat, cal_green_hue, cal_green_sat, cal_blue_hue, cal_blue_sat);
+        r.skin_protect = style.skin_protect;
+        r.category = style.category.clone();
+        r.description = style.description.clone();
+        if style.grain > 0.0 { r.grain_size = style.grain_size; }
         for i in 0..8 {
             r.hsl[i].hue += style.hsl[i].hue;
             r.hsl[i].sat += style.hsl[i].sat;
