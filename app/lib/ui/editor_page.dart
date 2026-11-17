@@ -1,3 +1,8 @@
+// Editor shell: top bar, photo viewer (with before/after split and crop overlay),
+// and a right-hand panel with one tab per tool, selected from a vertical rail.
+
+import 'dart:io';
+
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
@@ -22,12 +27,21 @@ class EditorPage extends StatefulWidget {
   State<EditorPage> createState() => _EditorPageState();
 }
 
-const _tabs = [
-  ('룩', Icons.auto_awesome),
-  ('다듬기', Icons.tune),
-  ('자르기', Icons.crop_rotate),
+/// One tool tab: rail label, icon, panel title and a one-line description.
+typedef _Tool = (String, IconData, String, String);
+
+const _tools = <_Tool>[
+  ('자동', Icons.auto_fix_high, '자동 보정', '사진을 분석해 기본 보정과 어울리는 룩을 골라요'),
+  ('룩', Icons.filter_vintage_outlined, '룩', 'LUT처럼 확실한 색감, 사진에 맞춰 세기를 자동 조절'),
+  ('AI', Icons.auto_awesome_outlined, 'AI 추천', '말로 요청하면 AI가 룩과 값을 골라요 (픽셀은 건드리지 않아요)'),
+  ('자르기', Icons.crop_rotate, '자르기 · 회전', '비율, 수평, 90° 회전, 반전'),
+  ('빛', Icons.wb_sunny_outlined, '빛', '노출 · 대비 · 톤'),
+  ('색', Icons.palette_outlined, '색', '화이트 밸런스 · 채도 · 색상 혼합'),
+  ('커브', Icons.show_chart, '톤 커브', 'RGB · 채널별 커브'),
+  ('그레이딩', Icons.contrast, '컬러 그레이딩', '섀도우 · 미드톤 · 하이라이트 색'),
+  ('효과', Icons.grain, '효과', '디테일 · 노이즈 · 필름 · 렌즈'),
 ];
-const _cropTab = 2;
+const _cropTab = 3;
 
 class _EditorPageState extends State<EditorPage> {
   final c = EditorController();
@@ -39,7 +53,8 @@ class _EditorPageState extends State<EditorPage> {
     super.initState();
     c.addListener(_onChange);
     c.loadFavorites();
-    tab = widget.initialTab;
+    c.loadRecent();
+    tab = widget.initialTab.clamp(0, _tools.length - 1);
     final first = widget.initialPhoto;
     if (first != null) {
       c.openPhoto(first).then((_) {
@@ -73,12 +88,20 @@ class _EditorPageState extends State<EditorPage> {
     if (c.cropping != (i == _cropTab)) c.setCropping(i == _cropTab);
   }
 
+  Future<void> _openPath(String path) async {
+    if (tab == _cropTab) _setTab(0);
+    await c.openPhoto(path);
+  }
+
   Future<void> _open() async {
     final f = await openFile(acceptedTypeGroups: [_photoTypes]);
-    if (f != null) {
-      _setTab(0);
-      await c.openPhoto(f.path);
-    }
+    if (f != null) await _openPath(f.path);
+  }
+
+  void _toggleCompare() {
+    if (!c.hasPhoto) return;
+    c.compareSplit = !c.compareSplit;
+    c.touch();
   }
 
   Future<void> _export() async {
@@ -129,27 +152,13 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
-  Widget _welcome() => Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ShaderMask(
-            shaderCallback: (r) => accentGradient.createShader(r),
-            child: const Icon(Icons.filter_vintage, size: 72, color: Colors.white),
-          ),
-          const SizedBox(height: 20),
-          const Text('사진 한 장으로 시작해요', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          const Text('열자마자 어울리는 룩을 골라 드려요. 마음에 드는 걸 누르기만 하면 돼요.',
-              style: TextStyle(color: textDim, fontSize: 14)),
-          const SizedBox(height: 24),
-          GradientButton(label: '사진 열기', icon: Icons.add_photo_alternate_outlined, onPressed: _open),
-          const SizedBox(height: 12),
-          const Text('사진을 이 창에 끌어다 놓아도 돼요 · JPEG · PNG · TIFF(16비트)', style: TextStyle(color: textDim, fontSize: 12)),
-        ]),
-      );
+  // ---------------------------------------------------------------- viewer
 
   Widget _viewer() {
     final img = c.showOriginal ? c.original : c.preview;
-    if (img == null) return _welcome();
+    if (img == null) {
+      return const Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: accent)));
+    }
     final picture = SizedBox.expand(child: RawImage(image: img, fit: BoxFit.contain, filterQuality: FilterQuality.medium));
     if (c.cropping && !c.showOriginal) {
       return Stack(children: [
@@ -179,19 +188,20 @@ class _EditorPageState extends State<EditorPage> {
                 child: SizedBox.expand(child: RawImage(image: before, fit: BoxFit.contain, filterQuality: FilterQuality.medium)),
               ),
             ),
-            Positioned(left: x - 1, top: 0, bottom: 0, child: Container(width: 2, color: Colors.white)),
+            Positioned(left: x - 0.75, top: 0, bottom: 0, child: Container(width: 1.5, color: Colors.white)),
             Positioned(
-              left: x - 18,
-              top: box.maxHeight / 2 - 18,
+              left: x - 16,
+              top: box.maxHeight / 2 - 16,
               child: Container(
-                width: 36,
-                height: 36,
-                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle, boxShadow: [BoxShadow(blurRadius: 8, color: Colors.black45)]),
-                child: const Icon(Icons.unfold_more, color: Colors.black87, size: 20, textDirection: TextDirection.ltr),
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                    color: Colors.white, shape: BoxShape.circle, boxShadow: [BoxShadow(blurRadius: 8, color: Colors.black45)]),
+                child: const Icon(Icons.unfold_more, color: Colors.black87, size: 18, textDirection: TextDirection.ltr),
               ),
             ),
-            const Positioned(left: 12, bottom: 12, child: _Tag('원본')),
-            const Positioned(right: 12, bottom: 12, child: _Tag('보정')),
+            const Positioned(left: 12, top: 12, child: _Tag('원본')),
+            const Positioned(right: 12, top: 12, child: _Tag('보정')),
           ]),
         );
       });
@@ -203,135 +213,169 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
-  Widget _tabBar() => Container(
-        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(14)),
-        child: Row(children: [
-          for (var i = 0; i < _tabs.length; i++)
-            Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => _setTab(i),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding: const EdgeInsets.symmetric(vertical: 9),
-                  decoration: BoxDecoration(
-                    gradient: tab == i ? accentGradient : null,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(_tabs[i].$2, size: 16, color: tab == i ? Colors.black87 : textDim),
-                    const SizedBox(width: 6),
-                    Text(_tabs[i].$1,
-                        style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w700, color: tab == i ? Colors.black87 : textDim)),
-                  ]),
-                ),
+  Widget _viewerArea() => Stack(children: [
+        Positioned.fill(child: Padding(padding: const EdgeInsets.all(16), child: _viewer())),
+        if (c.busy != null)
+          Positioned(
+            top: 16,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                    color: const Color(0xEE18191C), border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(6)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.8, color: accent)),
+                  const SizedBox(width: 10),
+                  Text(c.busy!, style: const TextStyle(fontSize: 12.5)),
+                ]),
               ),
             ),
+          ),
+        if (c.showOriginal) const Positioned(left: 28, top: 28, child: _Tag('원본')),
+      ]);
+
+  // ---------------------------------------------------------------- tools
+
+  Widget _panel() => switch (tab) {
+        0 => AutoPanel(c),
+        1 => LooksPanel(c),
+        2 => AiPanel(c),
+        3 => CropPanel(c),
+        4 => LightPanel(c),
+        5 => ColorPanel(c),
+        6 => CurvePanel(c),
+        7 => GradingPanel(c),
+        _ => EffectsPanel(c),
+      };
+
+  Widget _panelHeader() {
+    final t = _tools[tab];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: borderColor))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(t.$3, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 3),
+        Text(t.$4, style: const TextStyle(color: textDim, fontSize: 11.5)),
+      ]),
+    );
+  }
+
+  /// Vertical tool rail (desktop).
+  Widget _rail() => Container(
+        width: 68,
+        decoration: const BoxDecoration(color: bgColor, border: Border(left: BorderSide(color: borderColor))),
+        child: Material(type: MaterialType.transparency, child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
+          for (var i = 0; i < _tools.length; i++) ...[
+            if (i == 3 || i == 4) const Divider(height: 12, indent: 16, endIndent: 16, color: borderColor),
+            _RailItem(tool: _tools[i], selected: tab == i, onTap: () => _setTab(i)),
+          ],
+        ])),
+      );
+
+  /// Horizontal tool strip (narrow windows).
+  Widget _strip() => SizedBox(
+        height: 58,
+        child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 8), children: [
+          for (var i = 0; i < _tools.length; i++)
+            SizedBox(width: 62, child: _RailItem(tool: _tools[i], selected: tab == i, onTap: () => _setTab(i), compact: true)),
         ]),
       );
 
-  Widget _panel() => switch (tab) {
-        0 => LooksTab(c),
-        1 => AdjustTab(c),
-        _ => CropPanel(c),
-      };
+  // ---------------------------------------------------------------- top bar
 
   Widget _iconBtn(String tip, IconData icon, VoidCallback? onTap, {bool active = false}) => IconButton(
         tooltip: tip,
         onPressed: onTap,
-        icon: Icon(icon, size: 20, color: active ? accent : null),
+        style: IconButton.styleFrom(
+          backgroundColor: active ? accentDim : null,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+        ),
+        icon: Icon(icon, size: 19, color: active ? accent : null),
       );
+
+  Widget _topBar(bool wide) {
+    final has = c.hasPhoto;
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: const BoxDecoration(color: bgColor, border: Border(bottom: BorderSide(color: borderColor))),
+      child: Row(children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: has ? c.closePhoto : null,
+          child: const Padding(padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4), child: AcgLogo(size: 15)),
+        ),
+        SizedBox(width: wide ? 8 : 0),
+        _iconBtn('사진 열기 (Ctrl+O)', Icons.folder_open_outlined, _open),
+        if (has && wide)
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Text(p.basename(c.path!),
+                  overflow: TextOverflow.ellipsis, style: const TextStyle(color: textDim, fontSize: 12.5)),
+            ),
+          ),
+        const Spacer(),
+        if (has) ...[
+          _iconBtn('되돌리기 (Ctrl+Z)', Icons.undo, c.canUndo ? c.undo : null),
+          _iconBtn('다시 하기 (Ctrl+Y)', Icons.redo, c.canRedo ? c.redo : null),
+          if (wide) _iconBtn('처음으로', Icons.restart_alt, c.reset),
+          const SizedBox(width: 4),
+          _iconBtn('전후 비교 (\\)', Icons.compare, _toggleCompare, active: c.compareSplit),
+          if (wide)
+            _iconBtn('같은 룩으로 여러 장 저장', Icons.photo_library_outlined, _batch)
+          else
+            PopupMenuButton<int>(
+              icon: const Icon(Icons.more_horiz, size: 19),
+              onSelected: (v) => v == 0 ? c.reset() : _batch(),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 0, child: Text('처음으로')),
+                PopupMenuItem(value: 1, child: Text('같은 룩으로 여러 장 저장')),
+              ],
+            ),
+          SizedBox(width: wide ? 8 : 2),
+          GradientButton(label: '저장', icon: wide ? Icons.download : null, onPressed: _export),
+        ],
+      ]),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 900;
     final has = c.hasPhoto;
-    final topBar = Container(
-      height: 56,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      color: bgColor,
-      child: Row(children: [
-        const SizedBox(width: 4),
-        ShaderMask(
-          shaderCallback: (r) => accentGradient.createShader(r),
-          child: const Text('ACG', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 2, color: Colors.white)),
-        ),
-        const SizedBox(width: 12),
-        _iconBtn('사진 열기 (Ctrl+O)', Icons.add_photo_alternate_outlined, _open),
-        const Spacer(),
-        _iconBtn('되돌리기 (Ctrl+Z)', Icons.undo, c.canUndo ? c.undo : null),
-        _iconBtn('다시 하기 (Ctrl+Y)', Icons.redo, c.canRedo ? c.redo : null),
-        if (wide) _iconBtn('처음으로', Icons.restart_alt, has ? c.reset : null),
-        _iconBtn('전후 비교 (\\)', Icons.compare, has
-            ? () {
-                c.compareSplit = !c.compareSplit;
-                c.touch();
-              }
-            : null, active: c.compareSplit),
-        if (wide)
-          _iconBtn('같은 룩으로 여러 장 저장', Icons.photo_library_outlined, has ? _batch : null)
-        else
-          PopupMenuButton<int>(
-            enabled: has,
-            icon: const Icon(Icons.more_horiz, size: 20),
-            onSelected: (v) => v == 0 ? c.reset() : _batch(),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 0, child: Text('처음으로')),
-              PopupMenuItem(value: 1, child: Text('같은 룩으로 여러 장 저장')),
-            ],
-          ),
-        const SizedBox(width: 8),
-        GradientButton(label: '저장', icon: wide ? Icons.download : null, onPressed: has ? _export : null),
-      ]),
-    );
-
-    final viewer = Stack(children: [
-      Positioned.fill(
-        child: Padding(
-          padding: EdgeInsets.all(has ? 12 : 0),
-          child: ClipRRect(borderRadius: BorderRadius.circular(has ? 12 : 0), child: _viewer()),
-        ),
-      ),
-      if (c.busy != null)
-        Positioned(
-          top: 20,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(color: const Color(0xE6000000), borderRadius: BorderRadius.circular(24)),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: accent)),
-                const SizedBox(width: 10),
-                Text(c.busy!, style: const TextStyle(fontSize: 13)),
-              ]),
-            ),
-          ),
-        ),
-      if (c.showOriginal) const Positioned(left: 24, bottom: 24, child: _Tag('원본')),
-    ]);
-
-    final side = Column(children: [_tabBar(), Expanded(child: _panel())]);
 
     final Widget body;
     if (!has) {
-      body = viewer;
+      body = StartScreen(c: c, onOpen: _open, onOpenPath: _openPath);
     } else if (wide) {
       body = Row(children: [
-        Expanded(child: viewer),
-        Container(width: 400, color: surfaceColor, child: side),
+        Expanded(child: _viewerArea()),
+        Container(
+          width: 360,
+          decoration: const BoxDecoration(color: surfaceColor, border: Border(left: BorderSide(color: borderColor))),
+          child: Material(type: MaterialType.transparency, child: Column(children: [_panelHeader(), Expanded(child: _panel())])),
+        ),
+        _rail(),
       ]);
     } else {
       body = Column(children: [
-        Expanded(child: viewer),
+        Expanded(child: _viewerArea()),
         Container(
-          height: 360,
-          decoration: const BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-          child: SafeArea(top: false, child: side),
+          height: 380,
+          decoration: const BoxDecoration(color: surfaceColor, border: Border(top: BorderSide(color: borderColor))),
+          child: SafeArea(
+            top: false,
+            child: Material(type: MaterialType.transparency, child: Column(children: [
+              _strip(),
+              const Divider(height: 1, color: borderColor),
+              Expanded(child: _panel()),
+            ])),
+          ),
         ),
       ]);
     }
@@ -342,10 +386,7 @@ class _EditorPageState extends State<EditorPage> {
         const SingleActivator(LogicalKeyboardKey.keyY, control: true): c.redo,
         const SingleActivator(LogicalKeyboardKey.keyO, control: true): _open,
         const SingleActivator(LogicalKeyboardKey.keyE, control: true): _export,
-        const SingleActivator(LogicalKeyboardKey.backslash): () {
-          c.compareSplit = !c.compareSplit;
-          c.touch();
-        },
+        const SingleActivator(LogicalKeyboardKey.backslash): _toggleCompare,
       },
       child: Focus(
         autofocus: true,
@@ -357,16 +398,13 @@ class _EditorPageState extends State<EditorPage> {
               onDragExited: (_) => setState(() => dragOver = false),
               onDragDone: (d) {
                 setState(() => dragOver = false);
-                if (d.files.isNotEmpty) {
-                  _setTab(0);
-                  c.openPhoto(d.files.first.path);
-                }
+                if (d.files.isNotEmpty) _openPath(d.files.first.path);
               },
               child: Container(
                 foregroundDecoration: BoxDecoration(
-                  border: Border.all(color: dragOver ? accent : Colors.transparent, width: 3),
+                  border: Border.all(color: dragOver ? accent : Colors.transparent, width: 2),
                 ),
-                child: Column(children: [topBar, Expanded(child: body)]),
+                child: Column(children: [_topBar(wide), Expanded(child: body)]),
               ),
             ),
           ),
@@ -374,6 +412,270 @@ class _EditorPageState extends State<EditorPage> {
       ),
     );
   }
+}
+
+class _RailItem extends StatelessWidget {
+  const _RailItem({required this.tool, required this.selected, required this.onTap, this.compact = false});
+  final _Tool tool;
+  final bool selected;
+  final VoidCallback onTap;
+  final bool compact;
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? accent : textDim;
+    return Tooltip(
+      message: tool.$3,
+      waitDuration: const Duration(milliseconds: 600),
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: EdgeInsets.symmetric(vertical: compact ? 6 : 9),
+          decoration: BoxDecoration(
+            border: compact
+                ? Border(bottom: BorderSide(color: selected ? accent : Colors.transparent, width: 2))
+                : Border(right: BorderSide(color: selected ? accent : Colors.transparent, width: 2)),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(tool.$2, size: 20, color: color),
+            const SizedBox(height: 4),
+            Text(tool.$1,
+                style: TextStyle(fontSize: 10.5, color: selected ? Colors.white : textDim, fontWeight: selected ? FontWeight.w600 : null)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Wordmark: amber square mark + "ACG".
+class AcgLogo extends StatelessWidget {
+  const AcgLogo({super.key, this.size = 15});
+  final double size;
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: size * 1.35,
+          height: size * 1.35,
+          decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(size * 0.3)),
+          child: Icon(Icons.blur_on, size: size, color: onAccent),
+        ),
+        SizedBox(width: size * 0.55),
+        Text('ACG', style: TextStyle(fontSize: size, fontWeight: FontWeight.w800, letterSpacing: size * 0.12)),
+      ]);
+}
+
+// ------------------------------------------------------------------ start screen
+
+class StartScreen extends StatefulWidget {
+  const StartScreen({super.key, required this.c, required this.onOpen, required this.onOpenPath});
+  final EditorController c;
+  final VoidCallback onOpen;
+  final ValueChanged<String> onOpenPath;
+  @override
+  State<StartScreen> createState() => _StartScreenState();
+}
+
+class _StartScreenState extends State<StartScreen> {
+  bool hoverDrop = false;
+
+  static const features = [
+    (Icons.auto_fix_high, '자동 분석', '히스토그램으로 노출·화이트밸런스를 먼저 바로잡아요'),
+    (Icons.filter_vintage_outlined, '사진에 맞춰지는 룩', 'LUT처럼 확실한 색감을, 사진마다 세기를 맞춰 얹어요'),
+    (Icons.auto_awesome_outlined, 'AI는 값만 조절', '픽셀을 새로 그리지 않아 화질이 그대로예요'),
+    (Icons.high_quality_outlined, '16비트 무손실', '원본 해상도 그대로 JPEG · TIFF · PNG 저장'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final recent = widget.c.recent;
+    return LayoutBuilder(builder: (context, box) {
+      final wide = box.maxWidth >= 980;
+      final hero = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        const AcgLogo(size: 22),
+        const SizedBox(height: 28),
+        const Text('사진에 어울리는 색을\n자동으로 찾아 드려요',
+            style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700, height: 1.3, letterSpacing: -0.5)),
+        const SizedBox(height: 12),
+        const Text('사진을 열면 장면을 분석하고, 룩을 그 사진에 맞게 조절해서 보여 줘요.',
+            style: TextStyle(color: textDim, fontSize: 14, height: 1.5)),
+        const SizedBox(height: 28),
+        _dropZone(),
+        const SizedBox(height: 28),
+        for (final (icon, title, sub) in features)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(icon, size: 18, color: accent),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(sub, style: const TextStyle(color: textDim, fontSize: 12)),
+                ]),
+              ),
+            ]),
+          ),
+      ]);
+
+      final side = Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+        const _SectionTitle('최근 사진'),
+        if (recent.isEmpty)
+          Container(
+            height: 160,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(8)),
+            child: const Text('아직 연 사진이 없어요', style: TextStyle(color: textDim, fontSize: 12.5)),
+          )
+        else
+          GridView.count(
+            crossAxisCount: wide ? 4 : 3,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 0.82,
+            children: [for (final r in recent) _RecentTile(path: r, onTap: () => widget.onOpenPath(r))],
+          ),
+        const SizedBox(height: 28),
+        const _SectionTitle('곧 추가될 기능'),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: surfaceColor, border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(8)),
+          child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.photo_library_outlined, color: accent, size: 22),
+            SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Text('사진 정리', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  SizedBox(width: 8),
+                  _Badge('준비 중'),
+                ]),
+                SizedBox(height: 6),
+                Text('폴더를 넣으면 비슷한 연사 중 가장 선명한 컷을 골라 주고, 크게 넘겨 보며 남길 사진만 새 폴더로 정리해요.',
+                    style: TextStyle(color: textDim, fontSize: 12, height: 1.5)),
+              ]),
+            ),
+          ]),
+        ),
+      ]);
+
+      final content = wide
+          ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 420, child: hero),
+              const SizedBox(width: 64),
+              Expanded(child: side),
+            ])
+          : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [hero, const SizedBox(height: 32), side]);
+
+      return SingleChildScrollView(
+        padding: EdgeInsets.symmetric(horizontal: wide ? 64 : 24, vertical: wide ? 56 : 28),
+        child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1180), child: content)),
+      );
+    });
+  }
+
+  Widget _dropZone() => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => hoverDrop = true),
+        onExit: (_) => setState(() => hoverDrop = false),
+        child: GestureDetector(
+          onTap: widget.onOpen,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.symmetric(vertical: 26, horizontal: 20),
+            decoration: BoxDecoration(
+              color: hoverDrop ? const Color(0xFF1C1D21) : surfaceColor,
+              border: Border.all(color: hoverDrop ? accent : borderColor),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(color: accentDim, borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.add_photo_alternate_outlined, color: accent),
+              ),
+              const SizedBox(width: 16),
+              const Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('사진 열기', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  SizedBox(height: 3),
+                  Text('클릭하거나 사진을 끌어다 놓으세요 · Ctrl+O', style: TextStyle(color: textDim, fontSize: 12)),
+                ]),
+              ),
+              const Text('JPEG · PNG · TIFF', style: TextStyle(color: textDim, fontSize: 11)),
+            ]),
+          ),
+        ),
+      );
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Text(text.toUpperCase(),
+            style: const TextStyle(color: textDim, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+      );
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(color: accentDim, borderRadius: BorderRadius.circular(4)),
+        child: Text(text, style: const TextStyle(color: accent, fontSize: 10.5, fontWeight: FontWeight.w600)),
+      );
+}
+
+class _RecentTile extends StatefulWidget {
+  const _RecentTile({required this.path, required this.onTap});
+  final String path;
+  final VoidCallback onTap;
+  @override
+  State<_RecentTile> createState() => _RecentTileState();
+}
+
+class _RecentTileState extends State<_RecentTile> {
+  bool hover = false;
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => hover = true),
+        onExit: (_) => setState(() => hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                decoration: BoxDecoration(
+                  color: cardColor,
+                  border: Border.all(color: hover ? accent : borderColor),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Image.file(
+                  File(widget.path),
+                  fit: BoxFit.cover,
+                  cacheWidth: 360,
+                  filterQuality: FilterQuality.medium,
+                  errorBuilder: (_, _, _) => const Icon(Icons.image_outlined, color: textDim),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(p.basename(widget.path),
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, color: textDim)),
+          ]),
+        ),
+      );
 }
 
 class _LeftClipper extends CustomClipper<Rect> {

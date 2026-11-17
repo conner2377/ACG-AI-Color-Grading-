@@ -147,6 +147,41 @@ class EditorController extends ChangeNotifier {
   bool get canUndo => _hIndex > 0;
   bool get canRedo => _hIndex < _history.length - 1;
 
+  /// Recently opened photos (most recent first).
+  List<String> recent = [];
+
+  Future<void> loadRecent() async {
+    final prefs = await SharedPreferences.getInstance();
+    recent = (prefs.getStringList('recent') ?? []).where((p) => File(p).existsSync()).toList();
+    notifyListeners();
+  }
+
+  Future<void> _remember(String p) async {
+    recent
+      ..remove(p)
+      ..insert(0, p);
+    if (recent.length > 12) recent = recent.sublist(0, 12);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('recent', recent);
+  }
+
+  /// Close the photo and go back to the start screen.
+  void closePhoto() {
+    final s = session;
+    session = null;
+    path = null;
+    preview = original = null;
+    recipe = emptyRecipe();
+    _blendFrom = _blendTo = null;
+    activeTemplate = null;
+    candidateThumbs = [];
+    aiThumbs = [];
+    compareSplit = false;
+    notifyListeners();
+    s?.close();
+    loadRecent();
+  }
+
   Future<void> openPhoto(String p) async {
     _setBusy('사진 불러오는 중…');
     try {
@@ -154,6 +189,9 @@ class EditorController extends ChangeNotifier {
       session = await EngineSession.open(p);
       unawaited(old?.close());
       path = p;
+      unawaited(_remember(p));
+      fitNotes = [];
+      fitStrength = null;
       recipe = emptyRecipe();
       _history
         ..clear()
@@ -269,17 +307,44 @@ class EditorController extends ChangeNotifier {
     return stripped.isEmpty;
   }
 
-  /// Apply a template like a Lightroom preset (layered on the base), with an amount.
-  void applyTemplate(Map<String, dynamic> t, {bool layer = true}) {
+  /// Fit looks to the photo (on by default). Off = plain preset, like a LUT pasted on.
+  bool autoFit = true;
+
+  /// Why the last look was adjusted for this photo, and how strongly it was applied.
+  List<String> fitNotes = [];
+  double? fitStrength;
+
+  /// Apply a look. Built-in looks are layered on the base and, with [autoFit], fitted to
+  /// this photo by the engine (statistics + strength search). Saved looks apply as-is.
+  Future<void> applyTemplate(Map<String, dynamic> t, {bool layer = true}) async {
     final base = _templateBase();
+    Map<String, dynamic> to;
+    fitNotes = [];
+    fitStrength = null;
+    if (layer && autoFit && session != null) {
+      final res = await session!.adaptLook(base, t);
+      to = res['recipe'] as Map<String, dynamic>;
+      final rep = res['report'] as Map<String, dynamic>;
+      fitNotes = (rep['notes'] as List).cast<String>();
+      fitStrength = (rep['strength'] as num).toDouble();
+    } else {
+      to = layer ? layerRecipe(base, t) : withGeometryOf(t, recipe);
+    }
     _blendFrom = base;
-    _blendTo = layer ? layerRecipe(base, t) : withGeometryOf(t, recipe);
+    _blendTo = to;
     activeTemplate = t['name'] as String?;
     templateAmount = 1.0;
-    recipe = cloneRecipe(_blendTo!);
+    recipe = cloneRecipe(to);
     _scheduleRender();
     commitHistory();
     notifyListeners();
+  }
+
+  void setAutoFit(bool v) {
+    autoFit = v;
+    notifyListeners();
+    final p = activePreset;
+    if (p != null) applyTemplate(p);
   }
 
   /// Template strength 0..150%.
@@ -468,7 +533,7 @@ class EditorController extends ChangeNotifier {
     final base = withGeometryOf(autoBase ?? emptyRecipe(), recipe);
     final templates = enginePresets();
     final refB64 = referencePath == null ? null : await EngineSession.thumbnailOf(referencePath);
-    final img = await s.aiThumbnail(base);
+    final img = await s.aiThumbnail(base, size: 512);
     final plan = await AiService(settings).plan(
       current: base,
       imageB64: img,
@@ -481,7 +546,10 @@ class EditorController extends ChangeNotifier {
     final byName = {for (final t in templates) t['name'] as String: t};
     final recipes = <Map<String, dynamic>>[];
     for (final v in plan.variations) {
-      var r = v.toRecipe(base, v.template == null ? null : byName[v.template]);
+      Map<String, dynamic>? look;
+      final t = v.template == null ? null : byName[v.template];
+      if (t != null) look = (await s.adaptLook(base, t))['recipe'] as Map<String, dynamic>;
+      var r = v.toRecipe(base, look);
       if (referencePath != null && v.referenceMatch > 0) {
         final matched = await s.matchReference(r, referencePath, v.referenceMatch);
         matched['name'] = r['name'];

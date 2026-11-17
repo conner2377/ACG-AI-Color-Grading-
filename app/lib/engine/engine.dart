@@ -27,6 +27,7 @@ typedef _StrSN = Pointer<Utf8> Function(Pointer<Void>);
 typedef _StrN = Pointer<Utf8> Function();
 typedef _MatchN = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Float);
 typedef _MatchD = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, double);
+typedef _AdaptN = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _AiThumbN = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Uint32);
 typedef _AiThumbD = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, int);
 typedef _CubeN = Pointer<Utf8> Function(Pointer<Utf8>);
@@ -63,6 +64,7 @@ class _Lib {
   late final analyze = _l.lookupFunction<_StrSN, _StrSN>('acg_analyze');
   late final presets = _l.lookupFunction<_StrN, _StrN>('acg_presets');
   late final matchReference = _l.lookupFunction<_MatchN, _MatchD>('acg_match_reference');
+  late final adaptLook = _l.lookupFunction<_AdaptN, _AdaptN>('acg_adapt_look');
   late final aiThumb = _l.lookupFunction<_AiThumbN, _AiThumbD>('acg_ai_thumbnail_b64');
   late final loadCube = _l.lookupFunction<_CubeN, _CubeN>('acg_load_cube');
   late final lastError = _l.lookupFunction<_StrN, _StrN>('acg_last_error');
@@ -184,6 +186,13 @@ class EngineSession {
     final json = jsonEncode(base);
     return _run((lib, a) => using((arena) => jsonDecode(lib.takeString(lib.matchReference(Pointer.fromAddress(a),
         json.toNativeUtf8(allocator: arena), referencePath.toNativeUtf8(allocator: arena), strength))) as Map<String, dynamic>));
+  }
+
+  /// Fit [look] to this photo on top of [base]. Returns {recipe, report:{strength, change, notes}}.
+  Future<Map<String, dynamic>> adaptLook(Map<String, dynamic> base, Map<String, dynamic> look) {
+    final b = jsonEncode(base), l = jsonEncode(look);
+    return _run((lib, a) => using((arena) => jsonDecode(lib.takeString(lib.adaptLook(
+        Pointer.fromAddress(a), b.toNativeUtf8(allocator: arena), l.toNativeUtf8(allocator: arena)))) as Map<String, dynamic>));
   }
 
   /// Small JPEG (base64) of the photo with [recipe] applied, for AI requests.

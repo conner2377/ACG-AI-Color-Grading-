@@ -3,14 +3,17 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-// Design tokens: warm, soft and simple.
-const accent = Color(0xFFFFA36C);
-const accent2 = Color(0xFFFF6F91);
-const accentGradient = LinearGradient(colors: [accent, accent2]);
-const bgColor = Color(0xFF0E0E11);
-const surfaceColor = Color(0xFF16161B);
-const cardColor = Color(0xFF1F1F26);
-const textDim = Color(0xFF9A9AA6);
+// Design tokens: one calm graphite theme with a single amber accent ("darkroom").
+const accent = Color(0xFFE3A857);
+const accentDim = Color(0x33E3A857);
+const accent2 = accent;
+const accentGradient = LinearGradient(colors: [accent, accent]);
+const bgColor = Color(0xFF111113);
+const surfaceColor = Color(0xFF18191C);
+const cardColor = Color(0xFF212226);
+const borderColor = Color(0xFF2C2E33);
+const textDim = Color(0xFF8D9099);
+const onAccent = Color(0xFF1A1307);
 
 /// Labeled slider. Double-tap the label to reset.
 class AdjustSlider extends StatelessWidget {
@@ -41,9 +44,9 @@ class AdjustSlider extends StatelessWidget {
     final bipolar = track == null && reset > min && reset < max;
     final slider = SliderTheme(
       data: SliderTheme.of(context).copyWith(
-        trackHeight: 4,
+        trackHeight: 3,
         trackShape: const RoundedRectSliderTrackShape(),
-        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8, elevation: 2),
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6, elevation: 0),
         overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
         activeTrackColor: track == null && !bipolar ? accent : Colors.transparent,
         inactiveTrackColor: track == null && !bipolar ? Colors.white12 : Colors.transparent,
@@ -70,7 +73,7 @@ class AdjustSlider extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.only(left: 12, right: 12, top: 6),
               child: Row(children: [
-                Text(label, style: const TextStyle(fontSize: 13, color: Colors.white70)),
+                Text(label, style: TextStyle(fontSize: 12.5, color: (value - reset).abs() < 1e-6 ? Colors.white70 : Colors.white)),
                 const Spacer(),
                 Text(shown,
                     style: TextStyle(
@@ -340,7 +343,7 @@ class _HistPainter extends CustomPainter {
 }
 
 
-/// Big look card: photo preview with the name over a soft gradient and a heart.
+/// Look tile (LUT-list style): preview with the name underneath, a favorite heart.
 class LookCard extends StatelessWidget {
   const LookCard({
     super.key,
@@ -364,72 +367,81 @@ class LookCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final card = AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        gradient: selected ? accentGradient : null,
-        color: selected ? null : Colors.transparent,
-      ),
-      padding: const EdgeInsets.all(2.5),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Stack(fit: StackFit.expand, children: [
-          Container(color: cardColor),
-          if (image != null) RawImage(image: image, fit: BoxFit.cover, filterQuality: FilterQuality.medium),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.transparent, Colors.transparent, Color(0xCC000000)],
-                stops: [0, 0.55, 1],
-              ),
-            ),
+    final tile = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Expanded(
+        child: Container(
+          decoration: BoxDecoration(
+            color: cardColor,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: selected ? accent : Colors.transparent, width: 2),
           ),
-          Positioned(
-            left: 10,
-            right: 10,
-            bottom: 8,
-            child: Text(label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-          ),
-          if (favorite != null)
-            Positioned(
-              top: 2,
-              right: 2,
-              child: IconButton(
-                visualDensity: VisualDensity.compact,
-                iconSize: 18,
-                onPressed: onFavorite,
-                icon: Icon(favorite! ? Icons.favorite : Icons.favorite_border,
-                    color: favorite! ? accent2 : Colors.white70,
-                    shadows: const [Shadow(blurRadius: 6, color: Colors.black54)]),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(fit: StackFit.expand, children: [
+            if (image != null)
+              RawImage(image: image, fit: BoxFit.cover, filterQuality: FilterQuality.medium)
+            else
+              const Center(child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5))),
+            if (favorite != null && (favorite! || onFavorite != null))
+              Positioned(
+                top: 0,
+                right: 0,
+                child: _TinyIcon(
+                  icon: favorite! ? Icons.favorite : Icons.favorite_border,
+                  color: favorite! ? accent : Colors.white70,
+                  onTap: onFavorite,
+                ),
               ),
-            ),
-          if (onDelete != null)
-            Positioned(
-              top: 2,
-              left: 2,
-              child: IconButton(
-                visualDensity: VisualDensity.compact,
-                iconSize: 16,
-                tooltip: '삭제',
-                onPressed: onDelete,
-                icon: const Icon(Icons.close, color: Colors.white70, shadows: [Shadow(blurRadius: 6, color: Colors.black54)]),
-              ),
-            ),
-        ]),
+            if (onDelete != null)
+              Positioned(top: 0, left: 0, child: _TinyIcon(icon: Icons.close, color: Colors.white70, onTap: onDelete)),
+          ]),
+        ),
       ),
-    );
+      const SizedBox(height: 4),
+      Text(label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 12, color: selected ? accent : Colors.white70, fontWeight: selected ? FontWeight.w600 : FontWeight.w400)),
+    ]);
     return Tooltip(
       message: subtitle ?? '',
       waitDuration: const Duration(milliseconds: 500),
-      child: MouseRegion(cursor: SystemMouseCursors.click, child: GestureDetector(onTap: onTap, child: card)),
+      child: MouseRegion(cursor: SystemMouseCursors.click, child: GestureDetector(onTap: onTap, child: tile)),
     );
   }
+}
+
+class _TinyIcon extends StatelessWidget {
+  const _TinyIcon({required this.icon, required this.color, this.onTap});
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.all(3),
+          padding: const EdgeInsets.all(3),
+          decoration: const BoxDecoration(color: Color(0x99000000), shape: BoxShape.circle),
+          child: Icon(icon, size: 13, color: color),
+        ),
+      );
+}
+
+/// Small uppercase-like group label used in panels.
+class PanelLabel extends StatelessWidget {
+  const PanelLabel(this.text, {super.key, this.trailing});
+  final String text;
+  final Widget? trailing;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 12, 4),
+        child: Row(children: [
+          Text(text, style: const TextStyle(color: textDim, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6)),
+          const SizedBox(width: 8),
+          const Expanded(child: Divider(color: borderColor, height: 1)),
+          if (trailing != null) ...[const SizedBox(width: 8), trailing!],
+        ]),
+      );
 }
 
 /// Collapsible rounded section used in the adjust tab.
@@ -476,31 +488,22 @@ class SectionCard extends StatelessWidget {
       );
 }
 
-/// Pill button filled with the accent gradient.
+/// Primary button: solid accent.
 class GradientButton extends StatelessWidget {
   const GradientButton({super.key, required this.label, this.icon, this.onPressed});
   final String label;
   final IconData? icon;
   final VoidCallback? onPressed;
   @override
-  Widget build(BuildContext context) => Opacity(
-        opacity: onPressed == null ? 0.4 : 1,
-        child: Material(
-          color: Colors.transparent,
-          child: Ink(
-            decoration: BoxDecoration(gradient: accentGradient, borderRadius: BorderRadius.circular(24)),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(24),
-              onTap: onPressed,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (icon != null) ...[Icon(icon, size: 18, color: Colors.black87), const SizedBox(width: 6)],
-                  Text(label, style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w700)),
-                ]),
-              ),
-            ),
-          ),
+  Widget build(BuildContext context) => FilledButton.icon(
+        onPressed: onPressed,
+        icon: icon == null ? const SizedBox.shrink() : Icon(icon, size: 17),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+        style: FilledButton.styleFrom(
+          backgroundColor: accent,
+          foregroundColor: onAccent,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
         ),
       );
 }

@@ -1,5 +1,4 @@
-// "다듬기" tab: a few plain-language sliders per section, with the professional
-// controls tucked behind "자세히".
+// Manual adjustment panels, one per tool tab: 빛 · 색 · 커브 · 그레이딩 · 효과.
 
 import 'package:flutter/material.dart';
 
@@ -25,189 +24,201 @@ Widget recipeSlider(EditorController c, String label, String path,
 
 String evDisplay(double v) => '${v >= 0 ? '+' : ''}${v.toStringAsFixed(2)}';
 
-class AdjustTab extends StatefulWidget {
-  const AdjustTab(this.c, {super.key});
+Widget _list(List<Widget> children) => ListView(padding: const EdgeInsets.only(bottom: 24), children: children);
+
+const _hint = Padding(
+  padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
+  child: Text('슬라이더 이름을 더블클릭하면 초기화돼요.', style: TextStyle(color: textDim, fontSize: 11.5)),
+);
+
+class LightPanel extends StatelessWidget {
+  const LightPanel(this.c, {super.key});
   final EditorController c;
   @override
-  State<AdjustTab> createState() => _AdjustTabState();
+  Widget build(BuildContext context) => _list([
+        HistogramView(c.histogram),
+        const PanelLabel('노출'),
+        recipeSlider(c, '노출', 'exposure', min: -3, max: 3, display: evDisplay),
+        recipeSlider(c, '대비', 'contrast'),
+        const PanelLabel('톤'),
+        recipeSlider(c, '하이라이트', 'highlights'),
+        recipeSlider(c, '섀도우', 'shadows'),
+        recipeSlider(c, '흰색 계열', 'whites'),
+        recipeSlider(c, '검정 계열', 'blacks'),
+        const PanelLabel('분위기'),
+        recipeSlider(c, '페이드 (매트 블랙)', 'fade', min: 0, max: 1),
+        recipeSlider(c, '디헤이즈', 'dehaze'),
+        _hint,
+      ]);
 }
 
-class _AdjustTabState extends State<AdjustTab> {
-  final open = <String>{'빛'};
-  final more = <String>{};
-  int band = 0;
-  String curveChannel = 'curve';
+class ColorPanel extends StatefulWidget {
+  const ColorPanel(this.c, {super.key});
+  final EditorController c;
+  @override
+  State<ColorPanel> createState() => _ColorPanelState();
+}
 
+class _ColorPanelState extends State<ColorPanel> {
+  int band = 0;
   static const bandColors = [
-    Color(0xFFE53935), Color(0xFFFB8C00), Color(0xFFFDD835), Color(0xFF43A047),
-    Color(0xFF00ACC1), Color(0xFF1E88E5), Color(0xFF8E24AA), Color(0xFFD81B60),
+    Color(0xFFE05252), Color(0xFFE08A3C), Color(0xFFE0C84A), Color(0xFF5BB35B),
+    Color(0xFF3FB5C4), Color(0xFF4A7FE0), Color(0xFF9563D6), Color(0xFFD65C9C),
   ];
-  static const curveChannels = {
-    'curve': ('전체', Colors.white),
-    'curve_r': ('R', Colors.redAccent),
-    'curve_g': ('G', Colors.greenAccent),
-    'curve_b': ('B', Colors.lightBlueAccent),
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.c;
+    return _list([
+      const PanelLabel('화이트 밸런스'),
+      recipeSlider(c, '색온도', 'temperature', track: tempGradient),
+      recipeSlider(c, '색조', 'tint', track: tintGradient),
+      const PanelLabel('채도'),
+      recipeSlider(c, '생동감', 'vibrance'),
+      recipeSlider(c, '채도', 'saturation'),
+      recipeSlider(c, '피부톤 보호', 'skin_protect', min: 0, max: 1),
+      SwitchListTile(
+        dense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+        title: const Text('흑백', style: TextStyle(fontSize: 12.5)),
+        value: getBool(c.recipe, 'monochrome'),
+        onChanged: (v) => c.edit((r) => r['monochrome'] = v, commit: true),
+      ),
+      const PanelLabel('색상 혼합 (HSL)'),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          for (var i = 0; i < 8; i++)
+            Tooltip(
+              message: hslBandNames[i],
+              child: GestureDetector(
+                onTap: () => setState(() => band = i),
+                child: Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    color: bandColors[i],
+                    shape: BoxShape.circle,
+                    border: Border.all(color: band == i ? Colors.white : Colors.transparent, width: 2),
+                  ),
+                ),
+              ),
+            ),
+        ]),
+      ),
+      recipeSlider(c, '${hslBandNames[band]} 색조', 'hsl.$band.hue', min: -45, max: 45, display: (v) => v.round().toString()),
+      recipeSlider(c, '${hslBandNames[band]} 채도', 'hsl.$band.sat'),
+      recipeSlider(c, '${hslBandNames[band]} 휘도', 'hsl.$band.lum'),
+      const PanelLabel('캘리브레이션 (원색)'),
+      recipeSlider(c, '빨강 원색 색조', 'cal_red_hue'),
+      recipeSlider(c, '빨강 원색 채도', 'cal_red_sat'),
+      recipeSlider(c, '초록 원색 색조', 'cal_green_hue'),
+      recipeSlider(c, '초록 원색 채도', 'cal_green_sat'),
+      recipeSlider(c, '파랑 원색 색조', 'cal_blue_hue'),
+      recipeSlider(c, '파랑 원색 채도', 'cal_blue_sat'),
+      _hint,
+    ]);
+  }
+}
+
+class CurvePanel extends StatefulWidget {
+  const CurvePanel(this.c, {super.key});
+  final EditorController c;
+  @override
+  State<CurvePanel> createState() => _CurvePanelState();
+}
+
+class _CurvePanelState extends State<CurvePanel> {
+  String channel = 'curve';
+  static const channels = {
+    'curve': ('RGB', Colors.white),
+    'curve_r': ('R', Color(0xFFE06060)),
+    'curve_g': ('G', Color(0xFF60C070)),
+    'curve_b': ('B', Color(0xFF6090E0)),
   };
 
-  EditorController get c => widget.c;
-
-  Widget _label(String t) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-        child: Text(t, style: const TextStyle(color: textDim, fontSize: 12, fontWeight: FontWeight.w600)),
-      );
-
-  /// Section with simple controls and an optional "자세히" block.
-  Widget _section(String title, IconData icon, List<Widget> simple, [List<Widget> advanced = const []]) {
-    final isOpen = open.contains(title);
-    final showMore = more.contains(title);
-    return SectionCard(
-      icon: icon,
-      title: title,
-      open: isOpen,
-      onToggle: () => setState(() => isOpen ? open.remove(title) : open.add(title)),
-      children: [
-        ...simple,
-        if (advanced.isNotEmpty)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => setState(() => showMore ? more.remove(title) : more.add(title)),
-              icon: Icon(showMore ? Icons.remove : Icons.add, size: 16),
-              label: Text(showMore ? '간단히' : '자세히'),
-              style: TextButton.styleFrom(foregroundColor: textDim, padding: const EdgeInsets.symmetric(horizontal: 16)),
-            ),
-          ),
-        if (showMore) ...advanced,
-      ],
-    );
-  }
-
-  List<List<double>> _curvePoints() {
-    final v = c.recipe[curveChannel];
+  List<List<double>> _points() {
+    final v = widget.c.recipe[channel];
     if (v is List) return [for (final p in v) [(p[0] as num).toDouble(), (p[1] as num).toDouble()]];
     return [];
   }
 
-  Widget _wheel(String title, String key) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _label(title),
-        recipeSlider(c, '색', '$key.hue', min: 0, max: 360, display: (v) => '${v.round()}°', track: hueGradient),
-        recipeSlider(c, '세기', '$key.sat', min: 0, max: 1),
-      ]);
-
   @override
   Widget build(BuildContext context) {
-    return ListView(padding: const EdgeInsets.only(top: 12, bottom: 24), children: [
-      _section('빛', Icons.wb_sunny_outlined, [
-        recipeSlider(c, '밝기', 'exposure', min: -3, max: 3, display: evDisplay),
-        recipeSlider(c, '대비', 'contrast'),
-        recipeSlider(c, '밝은 곳', 'highlights'),
-        recipeSlider(c, '어두운 곳', 'shadows'),
-      ], [
-        HistogramView(c.histogram),
-        recipeSlider(c, '가장 밝은 점', 'whites'),
-        recipeSlider(c, '가장 어두운 점', 'blacks'),
-        _label('톤 커브'),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(children: [
-            for (final e in curveChannels.entries)
-              Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: ChoiceChip(
-                  label: Text(e.value.$1),
-                  selected: curveChannel == e.key,
-                  onSelected: (_) => setState(() => curveChannel = e.key),
-                ),
-              ),
-            const Spacer(),
-            TextButton(
-                onPressed: () => c.edit((r) => r[curveChannel] = <List<double>>[], commit: true), child: const Text('초기화')),
-          ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(16),
+    final c = widget.c;
+    return _list([
+      HistogramView(c.histogram, height: 56),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+        child: Row(children: [
+          SegmentedButton<String>(
+            showSelectedIcon: false,
+            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            segments: [for (final e in channels.entries) ButtonSegment(value: e.key, label: Text(e.value.$1))],
+            selected: {channel},
+            onSelectionChanged: (s) => setState(() => channel = s.first),
+          ),
+          const Spacer(),
+          TextButton(onPressed: () => c.edit((r) => r[channel] = <List<double>>[], commit: true), child: const Text('초기화')),
+        ]),
+      ),
+      Padding(
+        padding: const EdgeInsets.all(16),
+        child: Container(
+          decoration: BoxDecoration(color: const Color(0xFF0D0D0F), border: Border.all(color: borderColor)),
           child: CurveEditor(
-            points: _curvePoints(),
-            color: curveChannels[curveChannel]!.$2,
-            onChanged: (p) => c.edit((r) => r[curveChannel] = p),
-            onChangeEnd: (p) => c.edit((r) => r[curveChannel] = p, commit: true),
+            points: _points(),
+            color: channels[channel]!.$2,
+            onChanged: (p) => c.edit((r) => r[channel] = p),
+            onChangeEnd: (p) => c.edit((r) => r[channel] = p, commit: true),
           ),
         ),
-        const Center(child: Text('탭: 점 추가 · 드래그: 이동 · 더블탭: 삭제', style: TextStyle(color: textDim, fontSize: 12))),
-      ]),
-      _section('색', Icons.palette_outlined, [
-        recipeSlider(c, '따뜻함', 'temperature', track: tempGradient),
-        recipeSlider(c, '생동감', 'vibrance'),
-        recipeSlider(c, '색 진하기', 'saturation'),
-        SwitchListTile(
-          dense: true,
-          title: const Text('흑백', style: TextStyle(fontSize: 13)),
-          value: getBool(c.recipe, 'monochrome'),
-          onChanged: (v) => c.edit((r) => r['monochrome'] = v, commit: true),
-        ),
-      ], [
-        recipeSlider(c, '초록 ↔ 자홍', 'tint', track: tintGradient),
-        recipeSlider(c, '피부톤 보호', 'skin_protect', min: 0, max: 1),
-        _label('색깔별 조정'),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            for (var i = 0; i < 8; i++)
-              Tooltip(
-                message: hslBandNames[i],
-                child: GestureDetector(
-                  onTap: () => setState(() => band = i),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 120),
-                    width: band == i ? 30 : 24,
-                    height: band == i ? 30 : 24,
-                    decoration: BoxDecoration(
-                      color: bandColors[i],
-                      shape: BoxShape.circle,
-                      border: Border.all(color: band == i ? Colors.white : Colors.transparent, width: 2),
-                    ),
-                  ),
-                ),
-              ),
-          ]),
-        ),
-        recipeSlider(c, '${hslBandNames[band]} 색조', 'hsl.$band.hue', min: -45, max: 45, display: (v) => v.round().toString()),
-        recipeSlider(c, '${hslBandNames[band]} 진하기', 'hsl.$band.sat'),
-        recipeSlider(c, '${hslBandNames[band]} 밝기', 'hsl.$band.lum'),
-        _wheel('어두운 곳에 색 입히기', 'grade_shadows'),
-        _wheel('중간 밝기에 색 입히기', 'grade_midtones'),
-        _wheel('밝은 곳에 색 입히기', 'grade_highlights'),
-        recipeSlider(c, '균형 (어두운 곳 ↔ 밝은 곳)', 'grade_balance'),
-        _label('원색 보정'),
-        recipeSlider(c, '빨강 색조', 'cal_red_hue'),
-        recipeSlider(c, '빨강 진하기', 'cal_red_sat'),
-        recipeSlider(c, '초록 색조', 'cal_green_hue'),
-        recipeSlider(c, '초록 진하기', 'cal_green_sat'),
-        recipeSlider(c, '파랑 색조', 'cal_blue_hue'),
-        recipeSlider(c, '파랑 진하기', 'cal_blue_sat'),
-      ]),
-      _section('분위기', Icons.blur_on, [
-        recipeSlider(c, '빛바랜 느낌', 'fade', min: 0, max: 1),
-        recipeSlider(c, '필름 입자', 'grain', min: 0, max: 1),
-        recipeSlider(c, '빛 번짐', 'bloom', min: 0, max: 1),
-        recipeSlider(c, '주변 어둡게 ↔ 밝게', 'vignette'),
-      ], [
-        recipeSlider(c, '입자 크기', 'grain_size', min: 0, max: 1),
-        recipeSlider(c, '붉은 빛 번짐 (할레이션)', 'halation', min: 0, max: 1),
-        recipeSlider(c, '안개 걷기', 'dehaze'),
-      ]),
-      _section('선명함', Icons.center_focus_strong, [
-        recipeSlider(c, '선명하게', 'sharpen', min: 0, max: 1),
-        recipeSlider(c, '질감', 'texture'),
-        recipeSlider(c, '또렷함', 'clarity'),
-      ], [
-        recipeSlider(c, '노이즈 줄이기', 'noise_reduction', min: 0, max: 1),
-        recipeSlider(c, '색 노이즈 줄이기', 'color_noise_reduction', min: 0, max: 1),
-      ]),
-      const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24),
-        child: Text('슬라이더 이름을 두 번 누르면 원래 값으로 돌아가요.', style: TextStyle(color: textDim, fontSize: 12)),
       ),
+      const Center(child: Text('클릭: 점 추가 · 드래그: 이동 · 더블클릭: 삭제', style: TextStyle(color: textDim, fontSize: 11.5))),
     ]);
   }
+}
+
+class GradingPanel extends StatelessWidget {
+  const GradingPanel(this.c, {super.key});
+  final EditorController c;
+  @override
+  Widget build(BuildContext context) {
+    Widget wheel(String title, String key) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          PanelLabel(title),
+          recipeSlider(c, '색상', '$key.hue', min: 0, max: 360, display: (v) => '${v.round()}°', track: hueGradient),
+          recipeSlider(c, '강도', '$key.sat', min: 0, max: 1),
+        ]);
+    return _list([
+      wheel('섀도우', 'grade_shadows'),
+      wheel('미드톤', 'grade_midtones'),
+      wheel('하이라이트', 'grade_highlights'),
+      const PanelLabel('전체'),
+      recipeSlider(c, '균형', 'grade_balance'),
+      _hint,
+    ]);
+  }
+}
+
+class EffectsPanel extends StatelessWidget {
+  const EffectsPanel(this.c, {super.key});
+  final EditorController c;
+  @override
+  Widget build(BuildContext context) => _list([
+        const PanelLabel('디테일'),
+        recipeSlider(c, '텍스처', 'texture'),
+        recipeSlider(c, '부분 대비', 'clarity'),
+        recipeSlider(c, '선명도', 'sharpen', min: 0, max: 1),
+        const PanelLabel('노이즈 감소'),
+        recipeSlider(c, '휘도', 'noise_reduction', min: 0, max: 1),
+        recipeSlider(c, '색상', 'color_noise_reduction', min: 0, max: 1),
+        const PanelLabel('필름'),
+        recipeSlider(c, '그레인', 'grain', min: 0, max: 1),
+        recipeSlider(c, '그레인 크기', 'grain_size', min: 0, max: 1),
+        recipeSlider(c, '할레이션', 'halation', min: 0, max: 1),
+        recipeSlider(c, '블룸', 'bloom', min: 0, max: 1),
+        const PanelLabel('렌즈'),
+        recipeSlider(c, '비네팅', 'vignette'),
+        _hint,
+      ]);
 }

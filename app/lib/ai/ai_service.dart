@@ -114,6 +114,11 @@ Field rules:
 - reference_match: 0.0-1.0, ONLY when a reference photo is given: how much exact color matching to blend in.
 
 Guidance:
+- The editor automatically FITS the chosen template to this photo (it tones down contrast,
+  warmth or saturation the photo already has, and protects highlights, shadows and skin).
+  So pick the look that matches the intent; don't try to compensate for the photo yourself.
+- Keep "adjust" small (usually within ±0.15) and use it only for what the request asks for
+  that the template lacks. A natural, harmonious result beats a dramatic filter.
 - Prefer templates + strength + small adjust.
 - Skin tones are protected automatically; keep faces natural unless asked otherwise.
 - Don't be timid: if the user asks for a strong mood (film, cinematic, moody, emotional), commit to it.
@@ -342,9 +347,10 @@ class AiVariation {
   final double referenceMatch;
 
   /// Build the recipe: baseline → template at strength → bounded deltas → advanced overrides.
-  Map<String, dynamic> toRecipe(Map<String, dynamic> base, Map<String, dynamic>? templateRecipe) {
+  /// [lookRecipe] is the full recipe of base + look (already fitted to the photo).
+  Map<String, dynamic> toRecipe(Map<String, dynamic> base, Map<String, dynamic>? lookRecipe) {
     var r = cloneRecipe(base);
-    if (templateRecipe != null) r = blendRecipe(base, layerRecipe(base, templateRecipe), strength);
+    if (lookRecipe != null) r = blendRecipe(base, lookRecipe, strength);
     for (final e in adjust.entries) {
       final range = recipeRanges[e.key]!;
       final lo = e.key == 'exposure' ? -5.0 : range.$1, hi = e.key == 'exposure' ? 5.0 : range.$2;
