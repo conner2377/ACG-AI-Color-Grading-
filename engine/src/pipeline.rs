@@ -572,14 +572,17 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
             }
             let ratio = ((l1 + 0.02) / (l0 + 0.02)).clamp(0.3, 3.0).powf(0.8);
             let (mut a, mut b) = (lab0[1] * ratio, lab0[2] * ratio);
-            let toned = [l1, a, b];
 
             // Saturation / vibrance (vibrance favors muted colors and spares skin).
             let chroma = (a * a + b * b).sqrt();
             let vib = r.vibrance * (1.0 - (chroma / 0.2).min(1.0)) * (1.0 - skin * 0.8);
-            let s = (1.0 + r.saturation + vib + sat_boost).max(0.0);
+            let s_raw = (1.0 + r.saturation + vib + sat_boost).max(0.0);
+            // Desaturating looks apply to skin too (so it matches the scene);
+            // boosts are held back on skin so faces don't go orange.
+            let s = if s_raw > 1.0 { 1.0 + (s_raw - 1.0) * (1.0 - skin * 0.7) } else { s_raw };
             a *= s;
             b *= s;
+            let based = [l1, a, b];
             let mut l = l1;
 
             if hsl_active && chroma > 1e-4 {
@@ -612,9 +615,9 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
 
             // Skin protection: blend styled color back toward the tone-only result.
             if skin > 0.0 {
-                l += (toned[0] - l) * skin;
-                a += (toned[1] - a) * skin;
-                b += (toned[2] - b) * skin;
+                l += (based[0] - l) * skin;
+                a += (based[1] - a) * skin;
+                b += (based[2] - b) * skin;
             }
 
             let mut p = oklab_to_linear_gamut([l, a, b]).map(linear_to_srgb);

@@ -40,7 +40,11 @@ fn main() -> Result<()> {
             let img = io::load(&args[1])?.downscale(1200);
             let dir = PathBuf::from(&args[2]);
             std::fs::create_dir_all(&dir)?;
+            let base = analysis::auto_correct(&analysis::analyze(&img));
+            io::save(&apply(&Recipe::default(), &img), dir.join("_원본.jpg"), io::Format::Jpeg(92))?;
+            io::save(&apply(&base, &img), dir.join("_자동보정.jpg"), io::Format::Jpeg(92))?;
             for r in presets::all() {
+                let r = base.layered(&r);
                 io::save(&apply(&r, &img), dir.join(format!("{}.jpg", r.name.replace(' ', "_"))), io::Format::Jpeg(92))?;
             }
         }
@@ -55,6 +59,11 @@ fn main() -> Result<()> {
             io::save(&apply(&recipe, &img), out, io::Format::from_path(out))?;
             if let Some(lut) = &recipe.lut {
                 std::fs::write(out.with_extension("cube"), lut.to_cube("reference match"))?;
+            }
+        }
+        Some("list") => {
+            for r in presets::all() {
+                println!("{}\t{}\t{}", r.name, r.category, r.description);
             }
         }
         _ => bail!("usage: grade apply|auto|presets|match ... (see source header)"),
