@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../ai/ai_service.dart';
 import 'editor_controller.dart';
 import 'panels.dart';
+import 'theme.dart';
 import 'widgets.dart';
 
 class AiPanel extends StatefulWidget {
@@ -70,113 +71,173 @@ class _AiPanelState extends State<AiPanel> {
   @override
   Widget build(BuildContext context) {
     final s = _settings;
-    final busy = widget.c.busy != null;
-    return ListView(padding: const EdgeInsets.all(16), children: [
-      Row(children: [
-        const Icon(Icons.auto_fix_high, size: 18, color: accent),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(s == null ? '' : '${s.provider.label} · ${s.model}${s.apiKey.isEmpty ? ' · 키 없음' : ''}',
-              style: const TextStyle(color: Colors.white70, fontSize: 13)),
-        ),
-        TextButton.icon(onPressed: s == null ? null : _openSettings, icon: const Icon(Icons.settings, size: 16), label: const Text('AI 설정')),
-      ]),
-      const SizedBox(height: 8),
-      TextField(
-        controller: _request,
-        minLines: 1,
-        maxLines: 3,
-        decoration: const InputDecoration(
-          hintText: '어떻게 보정할까요? 예) 적외선 촬영처럼, 하늘은 더 파랗게',
-          border: OutlineInputBorder(),
-          isDense: true,
-        ),
-        onSubmitted: busy ? null : (v) => _runAi(request: v),
+    final c = widget.c;
+    final busy = c.busy != null;
+    final noKey = s != null && s.apiKey.isEmpty;
+    return ListView(padding: const EdgeInsets.only(bottom: 24), children: [
+      // Who answers + settings.
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 10, 10),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: noKey ? AppColors.surface2 : AppColors.accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(noKey ? Icons.key_off_rounded : Icons.bolt_rounded, size: 14, color: noKey ? AppColors.textDim : AppColors.accent),
+              const SizedBox(width: 5),
+              Text(
+                s == null ? '…' : (noKey ? 'API 키를 먼저 설정하세요' : '${s.provider.label} · ${s.model}'),
+                style: TextStyle(fontSize: 12, color: noKey ? AppColors.textDim : AppColors.accent, fontWeight: FontWeight.w600),
+              ),
+            ]),
+          ),
+          const Spacer(),
+          IconButton(tooltip: 'AI 설정', onPressed: s == null ? null : _openSettings, icon: const Icon(Icons.settings_rounded, size: 20)),
+        ]),
       ),
-      const SizedBox(height: 8),
-      Wrap(spacing: 6, runSpacing: 6, children: [
-        for (final q in quick)
-          ActionChip(label: Text(q, style: const TextStyle(fontSize: 12)), onPressed: busy ? null : () {
-            _request.text = q;
-            _runAi(request: q);
-          }),
-      ]),
-      const SizedBox(height: 8),
-      FilledButton.icon(
-        onPressed: busy ? null : () => _runAi(request: _request.text),
-        icon: const Icon(Icons.auto_awesome),
-        label: const Text('AI로 보정하기'),
+      // Composer.
+      Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.fromLTRB(4, 4, 6, 6),
+        decoration: BoxDecoration(color: AppColors.surface2, borderRadius: BorderRadius.circular(18)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          TextField(
+            controller: _request,
+            minLines: 2,
+            maxLines: 5,
+            style: const TextStyle(fontSize: 14, height: 1.4),
+            decoration: const InputDecoration(
+              hintText: '어떤 느낌으로 바꿔볼까요?\n예) 적외선 사진처럼, 하늘은 더 파랗게',
+              fillColor: Colors.transparent,
+              focusedBorder: InputBorder.none,
+            ),
+            onSubmitted: busy ? null : (v) => _runAi(request: v),
+          ),
+          GradientButton(
+            label: '보정안 만들기',
+            icon: Icons.arrow_upward_rounded,
+            height: 38,
+            onPressed: busy ? null : () => _runAi(request: _request.text),
+          ),
+        ]),
       ),
-      if (widget.c.aiThumbs.isNotEmpty) ...[
-        const SizedBox(height: 16),
-        if ((widget.c.aiAnalysis ?? '').isNotEmpty)
-          Text(widget.c.aiAnalysis!, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-        const SizedBox(height: 8),
-        Wrap(children: [
-          for (final t in widget.c.aiThumbs)
-            Tooltip(
-              message: (t.recipe['description'] as String?) ?? '',
-              child: ThumbTile(
-                label: t.name,
-                image: t.image,
-                selected: widget.c.activeTemplate == t.name,
-                onTap: () => widget.c.pickAiVariation(t.recipe),
+      const SizedBox(height: 12),
+      SizedBox(
+        height: 36,
+        child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 16), children: [
+          for (final q in quick)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ActionChip(
+                label: Text(q),
+                labelStyle: const TextStyle(fontSize: 12.5, color: AppColors.textDim),
+                onPressed: busy
+                    ? null
+                    : () {
+                        _request.text = q;
+                        _runAi(request: q);
+                      },
               ),
             ),
         ]),
-        if (widget.c.templateBlendActive) AmountSlider(widget.c),
+      ),
+      if (c.aiThumbs.isNotEmpty) ...[
+        const SectionLabel('AI가 만든 보정안'),
+        if ((c.aiAnalysis ?? '').isNotEmpty)
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.surface2.withValues(alpha: 0.55),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(6),
+                topRight: Radius.circular(18),
+                bottomLeft: Radius.circular(18),
+                bottomRight: Radius.circular(18),
+              ),
+            ),
+            child: Text(c.aiAnalysis!, style: const TextStyle(color: AppColors.text, fontSize: 13, height: 1.5)),
+          ),
+        ThumbGrid(
+          count: c.aiThumbs.length,
+          minTile: 140,
+          builder: (i, size) => Tooltip(
+            message: (c.aiThumbs[i].recipe['description'] as String?) ?? '',
+            child: ThumbTile(
+              size: size,
+              label: c.aiThumbs[i].name,
+              image: c.aiThumbs[i].image,
+              selected: c.activeTemplate == c.aiThumbs[i].name,
+              onTap: () => c.pickAiVariation(c.aiThumbs[i].recipe),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (c.templateBlendActive) AmountSlider(c),
       ],
-      const Divider(height: 32),
-      const Text('참조 사진 따라하기', style: TextStyle(color: Colors.white54, fontSize: 12)),
-      AdjustSlider(
-        label: '색 매칭 강도',
-        value: _matchStrength,
-        min: 0,
-        max: 1,
-        reset: 0.8,
-        onChanged: (v) => setState(() => _matchStrength = v),
-        onChangeEnd: (_) {},
+      const SizedBox(height: 8),
+      SoftCard(
+        title: '이 사진처럼 해줘',
+        icon: Icons.photo_library_rounded,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const HintText('좋아하는 보정 사진을 고르면 그 색감을 따라가요.'),
+          AdjustSlider(
+            label: '따라가는 정도',
+            value: _matchStrength,
+            min: 0,
+            max: 1,
+            reset: 0.8,
+            display: (v) => '${(v * 100).round()}%',
+            onChanged: (v) => setState(() => _matchStrength = v),
+            onChangeEnd: (_) {},
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            child: Row(spacing: 8, children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: busy ? null : () => _matchReference(useAi: false),
+                  child: const Text('색만 정확히 맞추기', textAlign: TextAlign.center),
+                ),
+              ),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: busy ? null : () => _matchReference(useAi: true),
+                  child: const Text('AI가 분석해서 따라하기', textAlign: TextAlign.center),
+                ),
+              ),
+            ]),
+          ),
+        ]),
       ),
-      Row(children: [
-        Expanded(
-          child: OutlinedButton(
-            onPressed: busy ? null : () => _matchReference(useAi: false),
-            child: const Text('정밀 색 매칭 (오프라인)'),
-          ),
+      SoftCard(
+        title: '보정 가이드 글로 보정',
+        icon: Icons.link_rounded,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+          child: Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _link,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(hintText: 'https://… 보정 방법이 담긴 글', isDense: true, fillColor: AppColors.surface3),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: busy ? null : () => _runAi(request: '링크의 보정 가이드대로 보정해 주세요. ${_request.text}', guideUrl: _link.text),
+              child: const Text('적용'),
+            ),
+          ]),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: OutlinedButton(
-            onPressed: busy ? null : () => _matchReference(useAi: true),
-            child: const Text('AI가 분석해서 따라하기'),
-          ),
-        ),
-      ]),
-      const Divider(height: 32),
-      const Text('보정 가이드 링크', style: TextStyle(color: Colors.white54, fontSize: 12)),
-      const SizedBox(height: 6),
-      Row(children: [
-        Expanded(
-          child: TextField(
-            controller: _link,
-            decoration: const InputDecoration(hintText: 'https://… 보정 방법이 담긴 글', border: OutlineInputBorder(), isDense: true),
-          ),
-        ),
-        const SizedBox(width: 8),
-        FilledButton(
-          onPressed: busy ? null : () => _runAi(request: '링크의 보정 가이드대로 보정해 주세요. ${_request.text}', guideUrl: _link.text),
-          child: const Text('적용'),
-        ),
-      ]),
-      const Padding(
-        padding: EdgeInsets.only(top: 16),
-        child: Text('AI는 사진을 새로 그리지 않습니다. 히스토그램 기본 보정 위에 검증된 템플릿·강도·미세 조정값만 골라 4가지 안을 만들어요. 결과는 슬라이더로 다시 조정하거나 템플릿으로 저장할 수 있습니다.',
-            style: TextStyle(color: Colors.white38, fontSize: 12)),
       ),
+      const HintText('AI는 사진을 새로 그리지 않아요. 검증된 템플릿·강도·미세 조정값만 골라 4가지 안을 만들기 때문에 화질 손실이 없고, 결과는 언제든 다시 다듬을 수 있어요.'),
     ]);
   }
 }
-
 class _AiSettingsDialog extends StatefulWidget {
   const _AiSettingsDialog({required this.initial});
   final AiSettings initial;

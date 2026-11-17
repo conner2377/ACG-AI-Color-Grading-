@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'editor_controller.dart';
+import 'theme.dart';
 import 'widgets.dart';
 
 List<double> cropOf(Map<String, dynamic> r) {
@@ -126,7 +127,7 @@ class _CropPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final dim = Paint()..color = Colors.black.withValues(alpha: 0.55);
+    final dim = Paint()..color = Colors.black.withValues(alpha: 0.6);
     canvas.drawPath(
       Path.combine(PathOperation.difference, Path()..addRect(image), Path()..addRect(rect)),
       dim,
@@ -203,22 +204,44 @@ class CropPanel extends StatelessWidget {
     c.cropAspectLabel = '자유';
   }
 
+  Widget _action(String label, IconData icon, VoidCallback onTap, {double turn = 0}) => Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(color: AppColors.surface2, borderRadius: BorderRadius.circular(14)),
+            child: Column(children: [
+              Transform.rotate(angle: turn, child: Icon(icon, size: 20, color: AppColors.text)),
+              const SizedBox(height: 4),
+              Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textDim)),
+            ]),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final angle = (c.recipe['angle'] as num?)?.toDouble() ?? 0;
-    return ListView(padding: const EdgeInsets.symmetric(vertical: 12), children: [
+    return ListView(padding: const EdgeInsets.only(bottom: 20), children: [
+      const SectionLabel('비율'),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Wrap(spacing: 6, runSpacing: 6, children: [
           for (final k in ratios.keys)
             ChoiceChip(
-              label: Text(k, style: const TextStyle(fontSize: 12)),
+              label: Text(k),
               selected: c.cropAspectLabel == k,
+              labelStyle: TextStyle(
+                fontSize: 12.5,
+                color: c.cropAspectLabel == k ? AppColors.accent : AppColors.textDim,
+                fontWeight: c.cropAspectLabel == k ? FontWeight.w700 : FontWeight.w500,
+              ),
               onSelected: (_) => _setRatio(k),
             ),
         ]),
       ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 6),
       AdjustSlider(
         label: '수평 맞추기',
         value: angle,
@@ -228,40 +251,34 @@ class CropPanel extends StatelessWidget {
         onChanged: (v) => c.editGeometry((r) => r['angle'] = (v * 10).round() / 10),
         onChangeEnd: (_) => c.commitHistory(),
       ),
+      const SectionLabel('회전 · 반전'),
       Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Wrap(spacing: 4, children: [
-          IconButton(tooltip: '왼쪽으로 90° 회전', onPressed: () => _rotate(3), icon: const Icon(Icons.rotate_left)),
-          IconButton(tooltip: '오른쪽으로 90° 회전', onPressed: () => _rotate(1), icon: const Icon(Icons.rotate_right)),
-          IconButton(
-            tooltip: '좌우 반전',
-            onPressed: () => c.editGeometry((r) => r['flip_h'] = !(r['flip_h'] == true), commit: true),
-            icon: const Icon(Icons.flip),
-          ),
-          IconButton(
-            tooltip: '상하 반전',
-            onPressed: () => c.editGeometry((r) => r['flip_v'] = !(r['flip_v'] == true), commit: true),
-            icon: Transform.rotate(angle: math.pi / 2, child: const Icon(Icons.flip)),
-          ),
-          TextButton(
-            onPressed: () {
-              c.cropAspect = null;
-              c.cropAspectLabel = '자유';
-              c.editGeometry((r) {
-                for (final k in ['crop', 'angle', 'rotate90', 'flip_h', 'flip_v']) {
-                  r.remove(k);
-                }
-              }, commit: true);
-            },
-            child: const Text('자르기 초기화'),
-          ),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(spacing: 8, children: [
+          _action('왼쪽 90°', Icons.rotate_left_rounded, () => _rotate(3)),
+          _action('오른쪽 90°', Icons.rotate_right_rounded, () => _rotate(1)),
+          _action('좌우 반전', Icons.flip_rounded, () => c.editGeometry((r) => r['flip_h'] = !(r['flip_h'] == true), commit: true)),
+          _action('상하 반전', Icons.flip_rounded, () => c.editGeometry((r) => r['flip_v'] = !(r['flip_v'] == true), commit: true),
+              turn: math.pi / 2),
         ]),
       ),
-      const Padding(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-        child: Text('사진 위 모서리를 끌어 크기를, 안쪽을 끌어 위치를 바꿉니다. 다른 도구로 가면 잘린 결과가 보여요.',
-            style: TextStyle(color: Colors.white38, fontSize: 12)),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: OutlinedButton.icon(
+          onPressed: () {
+            c.cropAspect = null;
+            c.cropAspectLabel = '자유';
+            c.editGeometry((r) {
+              for (final k in ['crop', 'angle', 'rotate90', 'flip_h', 'flip_v']) {
+                r.remove(k);
+              }
+            }, commit: true);
+          },
+          icon: const Icon(Icons.restart_alt_rounded, size: 18),
+          label: const Text('자르기 초기화'),
+        ),
       ),
+      const HintText('사진 위 모서리를 끌어 크기를, 안쪽을 끌어 위치를 바꿔요. 다른 탭으로 가면 잘린 결과가 보여요.'),
     ]);
   }
 }

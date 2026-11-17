@@ -1,27 +1,25 @@
 import 'package:flutter/material.dart';
 
 import 'ui/editor_page.dart';
-import 'ui/widgets.dart';
+import 'ui/theme.dart';
 
-void main() {
-  runApp(const AcgApp());
+/// A photo path on the command line (e.g. "Open with ACG" or dropping a file on the
+/// exe) is opened right away.
+void main(List<String> args) {
+  runApp(AcgApp(initialPath: args.isEmpty ? null : args.first));
 }
 
 class AcgApp extends StatelessWidget {
-  const AcgApp({super.key});
+  const AcgApp({super.key, this.initialPath});
+  final String? initialPath;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'ACG - AI Color Grading',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark),
-        scaffoldBackgroundColor: const Color(0xFF0B0B0B),
-        useMaterial3: true,
-      ),
-      home: const EditorPage(),
+      theme: buildTheme(),
+      home: EditorPage(initialPath: initialPath),
     );
   }
 }
