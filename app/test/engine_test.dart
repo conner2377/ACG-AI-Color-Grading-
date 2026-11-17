@@ -5,11 +5,53 @@
 
 import 'dart:io';
 
+import 'package:acg/ai/ai_service.dart';
 import 'package:acg/engine/engine.dart';
 import 'package:acg/engine/recipe.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('layering adds scalars, keeps geometry, takes style grading', () {
+    final base = {'name': 'b', 'exposure': 0.5, 'temperature': 0.1, 'crop': [0.1, 0.1, 0.5, 0.5]};
+    final style = {
+      'name': '필름',
+      'category': '필름',
+      'exposure': -0.2,
+      'temperature': 0.1,
+      'grain': 0.3,
+      'grain_size': 0.6,
+      'grade_shadows': {'hue': 200, 'sat': 0.3},
+    };
+    final out = layerRecipe(base, style);
+    expect(getVal(out, 'exposure'), closeTo(0.3, 1e-9));
+    expect(getVal(out, 'temperature'), closeTo(0.2, 1e-9));
+    expect(out['crop'], [0.1, 0.1, 0.5, 0.5]);
+    expect(out['name'], '필름');
+    expect(getVal(out, 'grain_size'), 0.6);
+    expect(getNum(out, 'grade_shadows.sat'), 0.3);
+    // Blending: 0 = base, 1 = layered, 1.5 = exaggerated.
+    expect(getVal(blendRecipe(base, out, 0), 'exposure'), closeTo(0.5, 1e-9));
+    expect(getVal(blendRecipe(base, out, 1.5), 'exposure'), closeTo(0.2, 1e-9));
+    expect(getNum(blendRecipe(base, out, 0.5), 'grade_shadows.sat'), closeTo(0.15, 1e-9));
+  });
+
+  test('AI plan is validated and builds recipes', () {
+    final plan = AiPlan.fromJson({
+      'analysis': '테스트',
+      'variations': [
+        {'name': 'A', 'template': '필름', 'strength': 9, 'adjust': {'contrast': 3, 'bogus': 1}},
+        {'name': 'B', 'template': '없는 템플릿', 'adjust': {'exposure': -0.3}},
+      ],
+    }, {'필름'});
+    expect(plan.variations.length, 2);
+    expect(plan.variations[0].strength, 1.5);
+    expect(plan.variations[0].adjust, {'contrast': 0.5});
+    expect(plan.variations[1].template, isNull);
+    final r = plan.variations[1].toRecipe({'exposure': 0.4}, null);
+    expect(getVal(r, 'exposure'), closeTo(0.1, 1e-9));
+    expect(r['name'], 'B');
+  });
+
   test('merge clamps AI values and ignores unknown keys', () {
     final out = mergeAiRecipe(emptyRecipe(), {
       'exposure': 99,

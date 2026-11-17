@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../ai/ai_service.dart';
 import '../engine/engine.dart';
 import '../engine/recipe.dart';
 
@@ -49,6 +51,26 @@ class EditorController extends ChangeNotifier {
   List<PhotoThumb> candidateThumbs = [];
   Map<String, dynamic>? stats;
 
+  /// Physical baseline from the histogram (exposure, WB, black/white points).
+  Map<String, dynamic>? autoBase;
+
+  /// Latest AI result: explanation and the variations to pick from.
+  String? aiAnalysis;
+  List<PhotoThumb> aiThumbs = [];
+
+  /// Template category filter in the templates panel (null = all).
+  String? templateCategory;
+
+  /// True while the crop tool is open: the preview shows the uncropped frame.
+  bool cropping = false;
+  double? cropAspect;
+  String cropAspectLabel = '자유';
+
+  /// Live RGB + luma histogram of the current preview (64 bins each, normalized).
+  List<List<double>>? histogram;
+
+  void touch() => notifyListeners();
+
   bool get hasPhoto => session != null;
   bool get canUndo => _hIndex > 0;
   bool get canRedo => _hIndex < _history.length - 1;
@@ -68,11 +90,20 @@ class EditorController extends ChangeNotifier {
       _blendFrom = _blendTo = null;
       activeTemplate = null;
       candidateThumbs = [];
+      aiThumbs = [];
+      aiAnalysis = null;
       stats = null;
+      autoBase = null;
+      cropping = false;
+      cropAspect = null;
+      cropAspectLabel = '자유';
       original = await frameToImage(await session!.renderPreview(emptyRecipe()));
       preview = original;
+      histogram = null;
+      _scheduleRender();
       error = null;
       _setBusy(null);
+      await runAuto();
       unawaited(refreshTemplateThumbs());
     } catch (e) {
       error = '사진을 열 수 없습니다: $e';
@@ -137,45 +168,80 @@ class EditorController extends ChangeNotifier {
 
   void reset() => setRecipe(emptyRecipe());
 
-  /// Apply a template like a Lightroom preset, with an adjustable amount.
-  void applyTemplate(Map<String, dynamic> t) {
-    _blendFrom = cloneRecipe(_blendFrom ?? recipe);
-    _blendTo = cloneRecipe(t);
+  /// The edit a template is layered on: the state before the last template (so
+  /// clicking through templates doesn't stack them), or the histogram baseline when the
+  /// photo hasn't been edited yet. Geometry (crop/rotate) is always kept.
+  Map<String, dynamic> _templateBase() {
+    final from = _blendFrom ?? recipe;
+    if (_isUnedited(from) && autoBase != null) return withGeometryOf(autoBase!, from);
+    return cloneRecipe(from);
+  }
+
+  static const _geometryKeys = ['angle', 'rotate90', 'flip_h', 'flip_v', 'crop'];
+
+  static Map<String, dynamic> withGeometryOf(Map<String, dynamic> r, Map<String, dynamic> geo) {
+    final out = cloneRecipe(r);
+    for (final k in _geometryKeys) {
+      if (geo.containsKey(k)) {
+        out[k] = geo[k];
+      } else {
+        out.remove(k);
+      }
+    }
+    return out;
+  }
+
+  bool _isUnedited(Map<String, dynamic> r) {
+    final stripped = cloneRecipe(r)..removeWhere((k, _) => _geometryKeys.contains(k) || k == 'name');
+    return stripped.isEmpty;
+  }
+
+  /// Apply a template like a Lightroom preset (layered on the base), with an amount.
+  void applyTemplate(Map<String, dynamic> t, {bool layer = true}) {
+    final base = _templateBase();
+    _blendFrom = base;
+    _blendTo = layer ? layerRecipe(base, t) : withGeometryOf(t, recipe);
     activeTemplate = t['name'] as String?;
     templateAmount = 1.0;
-    recipe = cloneRecipe(t);
+    recipe = cloneRecipe(_blendTo!);
     _scheduleRender();
     commitHistory();
     notifyListeners();
   }
 
+  /// Template strength 0..150%.
   void setTemplateAmount(double a, {bool commit = false}) {
     final from = _blendFrom, to = _blendTo;
     if (from == null || to == null) return;
     templateAmount = a;
-    final out = cloneRecipe(a >= 0.5 ? to : from);
-    for (final k in recipeRanges.keys) {
-      final v = getNum(from, k) + (getNum(to, k) - getNum(from, k)) * a;
-      out[k] = v;
-    }
-    for (var i = 0; i < 8; i++) {
-      for (final f in ['hue', 'sat', 'lum']) {
-        final v = getNum(from, 'hsl.$i.$f') + (getNum(to, 'hsl.$i.$f') - getNum(from, 'hsl.$i.$f')) * a;
-        setNum(out, 'hsl.$i.$f', v);
-      }
-    }
-    for (final g in ['grade_shadows', 'grade_midtones', 'grade_highlights']) {
-      if (to[g] != null) {
-        out[g] = {'hue': getNum(to, '$g.hue'), 'sat': getNum(to, '$g.sat') * a};
-      }
-    }
-    if (to['lut'] != null) {
-      out['lut'] = to['lut'];
-      out['lut_strength'] = getNum(to, 'lut_strength') == 0 ? a : getNum(to, 'lut_strength') * a;
-    }
-    recipe = out;
+    recipe = blendRecipe(from, to, a);
     _scheduleRender();
     if (commit) commitHistory();
+    notifyListeners();
+  }
+
+  /// Edit geometry without breaking a template blend in progress.
+  void editGeometry(void Function(Map<String, dynamic> r) f, {bool commit = false}) {
+    f(recipe);
+    for (final m in [_blendFrom, _blendTo]) {
+      if (m != null) {
+        for (final k in _geometryKeys) {
+          if (recipe.containsKey(k)) {
+            m[k] = recipe[k];
+          } else {
+            m.remove(k);
+          }
+        }
+      }
+    }
+    _scheduleRender();
+    if (commit) commitHistory();
+    notifyListeners();
+  }
+
+  void setCropping(bool v) {
+    cropping = v;
+    _scheduleRender();
     notifyListeners();
   }
 
@@ -192,7 +258,9 @@ class EditorController extends ChangeNotifier {
     try {
       while (_dirty && session != null) {
         _dirty = false;
-        final frame = await session!.renderPreview(recipe);
+        final r = cropping ? (cloneRecipe(recipe)..remove('crop')) : recipe;
+        final frame = await session!.renderPreview(r);
+        histogram = _histogram(frame);
         preview = await frameToImage(frame);
         notifyListeners();
       }
@@ -202,6 +270,30 @@ class EditorController extends ChangeNotifier {
     } finally {
       _rendering = false;
     }
+  }
+
+  static List<List<double>> _histogram(Frame f) {
+    final h = List.generate(4, (_) => List<double>.filled(64, 0));
+    final px = f.rgba;
+    final step = math.max(1, (f.width * f.height / 120000).floor()) * 4;
+    for (var i = 0; i + 3 < px.length; i += step) {
+      final r = px[i], g = px[i + 1], b = px[i + 2];
+      h[0][r >> 2]++;
+      h[1][g >> 2]++;
+      h[2][b >> 2]++;
+      h[3][((r * 54 + g * 183 + b * 19) >> 8) >> 2]++;
+    }
+    for (final ch in h) {
+      // Normalize ignoring the extreme bins so clipping spikes don't flatten the rest.
+      var m = 1.0;
+      for (var i = 1; i < 63; i++) {
+        m = math.max(m, ch[i]);
+      }
+      for (var i = 0; i < 64; i++) {
+        ch[i] = math.min(1.0, ch[i] / m);
+      }
+    }
+    return h;
   }
 
   // ---------- templates ----------
@@ -255,7 +347,10 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> refreshTemplateThumbs() async {
-    presetThumbs = await _thumbs(enginePresets());
+    final base = autoBase ?? emptyRecipe();
+    final thumbs = await _thumbs([for (final p in enginePresets()) layerRecipe(base, p)]);
+    // Keep the original template (not the layered one) so applying it layers correctly.
+    presetThumbs = [for (var i = 0; i < thumbs.length; i++) PhotoThumb(enginePresets()[i], thumbs[i].image)];
     notifyListeners();
     userThumbs = await _thumbs(await loadUserTemplates());
     notifyListeners();
@@ -269,12 +364,76 @@ class EditorController extends ChangeNotifier {
       final res = await s.autoCandidates();
       stats = res['stats'] as Map<String, dynamic>;
       final cands = (res['candidates'] as List).cast<Map<String, dynamic>>();
+      if (cands.isNotEmpty) autoBase = cands.first;
       candidateThumbs = await _thumbs(cands);
       _setBusy(null);
     } catch (e) {
       error = '분석 실패: $e';
       _setBusy(null);
     }
+  }
+
+  /// Run the AI plan: baseline first (engine), then the model picks templates, strength
+  /// and bounded tweaks; each variation becomes a recipe, optionally blended with an
+  /// exact color match to the reference photo.
+  Future<void> runAi({
+    required AiSettings settings,
+    String request = '',
+    String? guideText,
+    String? referencePath,
+  }) async {
+    final s = session;
+    if (s == null) return;
+    if (autoBase == null) await runAuto();
+    final base = withGeometryOf(autoBase ?? emptyRecipe(), recipe);
+    final templates = enginePresets();
+    final refB64 = referencePath == null ? null : await EngineSession.thumbnailOf(referencePath);
+    final img = await s.aiThumbnail(base);
+    final plan = await AiService(settings).plan(
+      current: base,
+      imageB64: img,
+      stats: stats ?? await s.analyze(),
+      templates: templates,
+      request: request,
+      guideText: guideText,
+      referenceImageB64: refB64,
+    );
+    final byName = {for (final t in templates) t['name'] as String: t};
+    final recipes = <Map<String, dynamic>>[];
+    for (final v in plan.variations) {
+      var r = v.toRecipe(base, v.template == null ? null : byName[v.template]);
+      if (referencePath != null && v.referenceMatch > 0) {
+        final matched = await s.matchReference(r, referencePath, v.referenceMatch);
+        matched['name'] = r['name'];
+        matched['category'] = r['category'];
+        matched['description'] = r['description'];
+        r = matched;
+      }
+      recipes.add(r);
+    }
+    aiAnalysis = plan.analysis;
+    aiThumbs = await _thumbs(recipes);
+    if (recipes.isNotEmpty) {
+      _blendFrom = base;
+      _blendTo = recipes.first;
+      templateAmount = 1.0;
+      activeTemplate = recipes.first['name'] as String?;
+      setRecipe(recipes.first);
+    }
+    notifyListeners();
+  }
+
+  /// Pick one of the AI variations (keeps the strength slider working on it).
+  void pickAiVariation(Map<String, dynamic> r) {
+    final base = withGeometryOf(autoBase ?? emptyRecipe(), recipe);
+    _blendFrom = base;
+    _blendTo = withGeometryOf(r, recipe);
+    templateAmount = 1.0;
+    activeTemplate = r['name'] as String?;
+    recipe = cloneRecipe(_blendTo!);
+    _scheduleRender();
+    commitHistory();
+    notifyListeners();
   }
 
   Future<T?> withBusy<T>(String label, Future<T> Function() f) async {

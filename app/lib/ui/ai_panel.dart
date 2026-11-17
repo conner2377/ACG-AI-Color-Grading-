@@ -2,8 +2,8 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../ai/ai_service.dart';
-import '../engine/engine.dart';
 import 'editor_controller.dart';
+import 'panels.dart';
 import 'widgets.dart';
 
 class AiPanel extends StatefulWidget {
@@ -36,24 +36,10 @@ class _AiPanelState extends State<AiPanel> {
       await _openSettings();
       if ((_settings?.apiKey ?? '').isEmpty) return;
     }
-    await c.withBusy('${_settings!.provider.label}가 보정값을 만드는 중…', () async {
+    await c.withBusy('${_settings!.provider.label}가 보정안 4가지를 만드는 중…', () async {
       String? guide;
       if (guideUrl != null && guideUrl.trim().isNotEmpty) guide = await fetchGuideText(guideUrl);
-      String? refB64;
-      if (referencePath != null) {
-        refB64 = await EngineSession.thumbnailOf(referencePath);
-      }
-      final img = await s.aiThumbnail(c.recipe);
-      final stats = c.stats ?? await s.analyze();
-      final out = await AiService(_settings!).grade(
-        current: c.recipe,
-        imageB64: img,
-        stats: stats,
-        request: request ?? '',
-        guideText: guide,
-        referenceImageB64: refB64,
-      );
-      c.setRecipe(out);
+      await c.runAi(settings: _settings!, request: request ?? '', guideText: guide, referencePath: referencePath);
     });
   }
 
@@ -121,6 +107,25 @@ class _AiPanelState extends State<AiPanel> {
         icon: const Icon(Icons.auto_awesome),
         label: const Text('AI로 보정하기'),
       ),
+      if (widget.c.aiThumbs.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        if ((widget.c.aiAnalysis ?? '').isNotEmpty)
+          Text(widget.c.aiAnalysis!, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        const SizedBox(height: 8),
+        Wrap(children: [
+          for (final t in widget.c.aiThumbs)
+            Tooltip(
+              message: (t.recipe['description'] as String?) ?? '',
+              child: ThumbTile(
+                label: t.name,
+                image: t.image,
+                selected: widget.c.activeTemplate == t.name,
+                onTap: () => widget.c.pickAiVariation(t.recipe),
+              ),
+            ),
+        ]),
+        if (widget.c.templateBlendActive) AmountSlider(widget.c),
+      ],
       const Divider(height: 32),
       const Text('참조 사진 따라하기', style: TextStyle(color: Colors.white54, fontSize: 12)),
       AdjustSlider(
@@ -165,7 +170,7 @@ class _AiPanelState extends State<AiPanel> {
       ]),
       const Padding(
         padding: EdgeInsets.only(top: 16),
-        child: Text('AI는 사진을 새로 그리지 않고 보정값만 정합니다. 결과는 슬라이더로 다시 조정하거나 템플릿으로 저장할 수 있어요.',
+        child: Text('AI는 사진을 새로 그리지 않습니다. 히스토그램 기본 보정 위에 검증된 템플릿·강도·미세 조정값만 골라 4가지 안을 만들어요. 결과는 슬라이더로 다시 조정하거나 템플릿으로 저장할 수 있습니다.',
             style: TextStyle(color: Colors.white38, fontSize: 12)),
       ),
     ]);

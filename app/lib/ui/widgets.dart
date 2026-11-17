@@ -255,3 +255,42 @@ class _CurvePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CurvePainter old) => true;
 }
+
+/// RGB + luminance histogram, Lightroom-style.
+class HistogramView extends StatelessWidget {
+  const HistogramView(this.data, {super.key, this.height = 72});
+  final List<List<double>>? data;
+  final double height;
+  @override
+  Widget build(BuildContext context) => Container(
+        height: height,
+        margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        decoration: BoxDecoration(color: const Color(0xFF0E0E0E), borderRadius: BorderRadius.circular(6)),
+        child: data == null ? null : CustomPaint(painter: _HistPainter(data!), size: Size.infinite),
+      );
+}
+
+class _HistPainter extends CustomPainter {
+  _HistPainter(this.h);
+  final List<List<double>> h;
+  @override
+  void paint(Canvas canvas, Size size) {
+    const colors = [Color(0x99FF4040), Color(0x9940FF40), Color(0x994080FF), Color(0x55FFFFFF)];
+    for (var c = 0; c < 4; c++) {
+      final path = Path()..moveTo(0, size.height);
+      final n = h[c].length;
+      for (var i = 0; i < n; i++) {
+        path.lineTo(i / (n - 1) * size.width, size.height * (1 - h[c][i] * 0.95));
+      }
+      path
+        ..lineTo(size.width, size.height)
+        ..close();
+      canvas.drawPath(path, Paint()
+        ..color = colors[c]
+        ..blendMode = BlendMode.plus);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_HistPainter old) => old.h != h;
+}

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import 'ai_panel.dart';
+import 'crop.dart';
 import 'editor_controller.dart';
 import 'panels.dart';
 import 'widgets.dart';
@@ -23,6 +24,7 @@ class _Tool {
 const _tools = [
   _Tool('자동', Icons.auto_awesome),
   _Tool('템플릿', Icons.style),
+  _Tool('자르기', Icons.crop_rotate),
   _Tool('빛', Icons.wb_sunny_outlined),
   _Tool('색상', Icons.palette_outlined),
   _Tool('커브', Icons.show_chart),
@@ -30,6 +32,8 @@ const _tools = [
   _Tool('효과', Icons.blur_on),
   _Tool('AI', Icons.auto_fix_high),
 ];
+
+const _cropTool = 2;
 
 class _EditorPageState extends State<EditorPage> {
   final c = EditorController();
@@ -92,11 +96,12 @@ class _EditorPageState extends State<EditorPage> {
   Widget _panel() => switch (tool) {
         0 => AutoPanel(c),
         1 => TemplatesPanel(c),
-        2 => LightPanel(c),
-        3 => ColorPanel(c),
-        4 => CurvePanel(c),
-        5 => GradingPanel(c),
-        6 => EffectsPanel(c),
+        2 => CropPanel(c),
+        3 => LightPanel(c),
+        4 => ColorPanel(c),
+        5 => CurvePanel(c),
+        6 => GradingPanel(c),
+        7 => EffectsPanel(c),
         _ => AiPanel(c),
       };
 
@@ -113,6 +118,12 @@ class _EditorPageState extends State<EditorPage> {
         ]),
       );
     }
+    if (c.cropping && !c.showOriginal) {
+      return Stack(children: [
+        Positioned.fill(child: Center(child: RawImage(image: img, fit: BoxFit.contain, filterQuality: FilterQuality.medium))),
+        Positioned.fill(child: CropOverlay(c: c, image: img)),
+      ]);
+    }
     return GestureDetector(
       onLongPressStart: (_) => setState(() => c.showOriginal = true),
       onLongPressEnd: (_) => setState(() => c.showOriginal = false),
@@ -127,7 +138,10 @@ class _EditorPageState extends State<EditorPage> {
     final items = [
       for (var i = 0; i < _tools.length; i++)
         InkWell(
-          onTap: () => setState(() => tool = i),
+          onTap: () {
+            setState(() => tool = i);
+            if (c.cropping != (i == _cropTool)) c.setCropping(i == _cropTool);
+          },
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Column(mainAxisSize: MainAxisSize.min, children: [

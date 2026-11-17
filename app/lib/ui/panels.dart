@@ -9,12 +9,14 @@ import '../engine/recipe.dart';
 import 'editor_controller.dart';
 import 'widgets.dart';
 
+const templateCategories = ['기본', '필름', '감성', '깊이감', '시네마', '인물', '풍경', '야경', '흑백', '특수'];
+
 /// Builds a slider bound to a recipe field.
 Widget recipeSlider(EditorController c, String label, String path,
     {double min = -1, double max = 1, String Function(double)? display, Gradient? track}) {
   return AdjustSlider(
     label: label,
-    value: getNum(c.recipe, path),
+    value: path.contains('.') ? getNum(c.recipe, path) : getVal(c.recipe, path),
     min: min,
     max: max,
     display: display,
@@ -31,6 +33,7 @@ class LightPanel extends StatelessWidget {
   final EditorController c;
   @override
   Widget build(BuildContext context) => ListView(children: [
+        HistogramView(c.histogram),
         recipeSlider(c, '노출', 'exposure', min: -5, max: 5, display: evDisplay),
         recipeSlider(c, '대비', 'contrast'),
         recipeSlider(c, '하이라이트', 'highlights'),
@@ -97,6 +100,17 @@ class _ColorPanelState extends State<ColorPanel> {
         value: getBool(c.recipe, 'monochrome'),
         onChanged: (v) => c.edit((r) => r['monochrome'] = v, commit: true),
       ),
+      recipeSlider(c, '피부톤 보호', 'skin_protect', min: 0, max: 1),
+      const Padding(
+        padding: EdgeInsets.fromLTRB(24, 16, 24, 4),
+        child: Text('캘리브레이션 (원색)', style: TextStyle(color: Colors.white54, fontSize: 12)),
+      ),
+      recipeSlider(c, '빨강 원색 색조', 'cal_red_hue'),
+      recipeSlider(c, '빨강 원색 채도', 'cal_red_sat'),
+      recipeSlider(c, '초록 원색 색조', 'cal_green_hue'),
+      recipeSlider(c, '초록 원색 채도', 'cal_green_sat'),
+      recipeSlider(c, '파랑 원색 색조', 'cal_blue_hue'),
+      recipeSlider(c, '파랑 원색 채도', 'cal_blue_sat'),
     ]);
   }
 }
@@ -106,11 +120,29 @@ class EffectsPanel extends StatelessWidget {
   final EditorController c;
   @override
   Widget build(BuildContext context) => ListView(children: [
+        recipeSlider(c, '텍스처', 'texture'),
         recipeSlider(c, '부분 대비 (Clarity)', 'clarity'),
         recipeSlider(c, '디헤이즈', 'dehaze'),
         recipeSlider(c, '비네팅', 'vignette'),
-        recipeSlider(c, '그레인', 'grain', min: 0, max: 1),
         recipeSlider(c, '선명하게', 'sharpen', min: 0, max: 1),
+        recipeSlider(c, '노이즈 감소', 'noise_reduction', min: 0, max: 1),
+        recipeSlider(c, '색상 노이즈 감소', 'color_noise_reduction', min: 0, max: 1),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(24, 16, 24, 4),
+          child: Text('필름 효과', style: TextStyle(color: Colors.white54, fontSize: 12)),
+        ),
+        recipeSlider(c, '그레인', 'grain', min: 0, max: 1),
+        AdjustSlider(
+          label: '그레인 크기',
+          value: getVal(c.recipe, 'grain_size'),
+          min: 0,
+          max: 1,
+          reset: 0.3,
+          onChanged: (v) => c.edit((r) => r['grain_size'] = v),
+          onChangeEnd: (_) => c.commitHistory(),
+        ),
+        recipeSlider(c, '할레이션 (붉은 빛번짐)', 'halation', min: 0, max: 1),
+        recipeSlider(c, '블룸 (빛 번짐)', 'bloom', min: 0, max: 1),
       ]);
 }
 
@@ -131,6 +163,7 @@ class GradingPanel extends StatelessWidget {
       wheel('섀도우', 'grade_shadows'),
       wheel('미드톤', 'grade_midtones'),
       wheel('하이라이트', 'grade_highlights'),
+      recipeSlider(c, '균형 (섀도우 ↔ 하이라이트)', 'grade_balance'),
     ]);
   }
 }
@@ -210,20 +243,17 @@ class AutoPanel extends StatelessWidget {
         ]),
       ),
       const SizedBox(height: 12),
+      if (c.templateBlendActive) AmountSlider(c),
       if (c.candidateThumbs.isNotEmpty)
-        SizedBox(
-          height: 124,
-          child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
-            for (final t in c.candidateThumbs)
-              ThumbTile(
-                label: t.name,
-                image: t.image,
-                selected: c.activeTemplate == t.name,
-                onTap: () => c.applyTemplate(t.recipe),
-              ),
-          ]),
-        ),
-      if (c.templateBlendActive) _AmountSlider(c),
+        thumbGrid([
+          for (final t in c.candidateThumbs)
+            ThumbTile(
+              label: t.name,
+              image: t.image,
+              selected: c.activeTemplate == t.name,
+              onTap: () => c.applyTemplate(t.recipe, layer: false),
+            ),
+        ]),
       const Padding(
         padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
         child: Text('후보를 고른 뒤 빛·색상 패널에서 이어서 다듬을 수 있습니다.', style: TextStyle(color: Colors.white38, fontSize: 12)),
@@ -232,16 +262,23 @@ class AutoPanel extends StatelessWidget {
   }
 }
 
-class _AmountSlider extends StatelessWidget {
-  const _AmountSlider(this.c);
+/// Wrapping grid of thumbnails (many candidates/templates at once).
+Widget thumbGrid(List<Widget> tiles) => Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Wrap(spacing: 0, runSpacing: 4, children: tiles),
+    );
+
+class AmountSlider extends StatelessWidget {
+  const AmountSlider(this.c, {super.key});
   final EditorController c;
   @override
   Widget build(BuildContext context) => AdjustSlider(
         label: '적용 강도${c.activeTemplate != null ? ' · ${c.activeTemplate}' : ''}',
         value: c.templateAmount,
         min: 0,
-        max: 1,
+        max: 1.5,
         reset: 1,
+        display: (v) => '${(v * 100).round()}%',
         onChanged: (v) => c.setTemplateAmount(v),
         onChangeEnd: (v) => c.setTemplateAmount(v, commit: true),
       );
@@ -303,7 +340,7 @@ class TemplatesPanel extends StatelessWidget {
                 label: t.name,
                 image: t.image,
                 selected: c.activeTemplate == t.name,
-                onTap: () => c.applyTemplate(t.recipe),
+                onTap: () => c.applyTemplate(t.recipe, layer: !user),
                 onLongPress: user
                     ? () async {
                         final ok = await showDialog<bool>(
@@ -323,9 +360,34 @@ class TemplatesPanel extends StatelessWidget {
           ]),
         );
     return ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
-      if (c.templateBlendActive) _AmountSlider(c),
-      const Padding(padding: EdgeInsets.fromLTRB(16, 8, 16, 6), child: Text('기본 템플릿', style: TextStyle(color: Colors.white54, fontSize: 12))),
-      strip(c.presetThumbs),
+      if (c.templateBlendActive) AmountSlider(c),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+        child: Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final cat in [null, ...templateCategories])
+            ChoiceChip(
+              label: Text(cat ?? '전체', style: const TextStyle(fontSize: 12)),
+              selected: c.templateCategory == cat,
+              onSelected: (_) {
+                c.templateCategory = cat;
+                c.touch();
+              },
+            ),
+        ]),
+      ),
+      thumbGrid([
+        for (final t in c.presetThumbs.where((t) => c.templateCategory == null || t.recipe['category'] == c.templateCategory))
+          Tooltip(
+            message: (t.recipe['description'] as String?) ?? '',
+            waitDuration: const Duration(milliseconds: 400),
+            child: ThumbTile(
+              label: t.name,
+              image: t.image,
+              selected: c.activeTemplate == t.name,
+              onTap: () => c.applyTemplate(t.recipe),
+            ),
+          ),
+      ]),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
         child: Row(children: [
