@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../ai/ai_service.dart';
 import '../engine/engine.dart';
 import '../engine/recipe.dart';
+import 'work_store.dart';
 
 Future<ui.Image> frameToImage(Frame f) {
   final c = Completer<ui.Image>();
@@ -167,6 +168,7 @@ class EditorController extends ChangeNotifier {
 
   /// Close the photo and go back to the start screen.
   void closePhoto() {
+    flushAutosave();
     final s = session;
     session = null;
     path = null;
@@ -215,6 +217,19 @@ class EditorController extends ChangeNotifier {
       error = null;
       _setBusy(null);
       await runAuto();
+      savedWorks = await WorkStore.saved(p);
+      final prev = await WorkStore.current(p);
+      if (prev != null && !_isUnedited(prev) && path == p) {
+        recipe = cloneRecipe(prev);
+        _history
+          ..clear()
+          ..add(jsonEncode(emptyRecipe()))
+          ..add(jsonEncode(recipe));
+        _hIndex = 1;
+        _scheduleRender();
+        notice = '지난번 작업을 이어서 불러왔어요';
+        notifyListeners();
+      }
       unawaited(refreshTemplateThumbs());
     } catch (e) {
       error = '사진을 열 수 없습니다: $e';
@@ -249,6 +264,55 @@ class EditorController extends ChangeNotifier {
     _history.add(s);
     if (_history.length > 200) _history.removeAt(0);
     _hIndex = _history.length - 1;
+    _scheduleAutosave();
+    notifyListeners();
+  }
+
+  Timer? _autosave;
+
+  /// Write a pending autosave now (on close).
+  void flushAutosave() {
+    final t = _autosave;
+    if (t == null || !t.isActive) return;
+    t.cancel();
+    final p = path;
+    if (p != null) WorkStore.autosave(p, cloneRecipe(recipe));
+  }
+
+  void _scheduleAutosave() {
+    final p = path;
+    if (p == null) return;
+    _autosave?.cancel();
+    final r = cloneRecipe(recipe);
+    _autosave = Timer(const Duration(milliseconds: 800), () => WorkStore.autosave(p, r));
+  }
+
+  /// Named versions of the open photo's edit.
+  List<SavedWork> savedWorks = [];
+
+  /// Shown once after a photo reopens with its previous edit.
+  String? notice;
+
+  Future<void> saveWork(String name) async {
+    final p = path;
+    if (p == null) return;
+    await WorkStore.save(p, name, cloneRecipe(recipe));
+    savedWorks = await WorkStore.saved(p);
+    notice = '작업을 저장했어요: $name';
+    notifyListeners();
+  }
+
+  Future<void> loadWork(SavedWork w) async {
+    _blendFrom = _blendTo = null;
+    activeTemplate = null;
+    setRecipe(w.recipe);
+  }
+
+  Future<void> deleteWork(SavedWork w) async {
+    final p = path;
+    if (p == null) return;
+    await WorkStore.delete(p, w);
+    savedWorks = await WorkStore.saved(p);
     notifyListeners();
   }
 
@@ -557,12 +621,17 @@ class EditorController extends ChangeNotifier {
       recipes.add(r);
     }
     aiRequest = request;
+    aiRound = 1;
     await _showAi(plan.analysis, recipes, base);
   }
 
-  /// Feedback pass: the model compares the baseline with the current AI result and fixes
-  /// what is still off. The refined edit is added as a new card and applied.
-  Future<void> refineAi(AiSettings settings) async {
+  /// How many follow-up rounds the current AI edit has been through (1 = first answer).
+  int aiRound = 1;
+
+  /// Follow-up pass on the AI edit that is on screen: the model compares the baseline
+  /// with it and changes it per [followUp] (2차, 3차 수정…), or just polishes it when
+  /// [followUp] is empty. The result is added as a new card and applied.
+  Future<void> refineAi(AiSettings settings, {String followUp = ''}) async {
     final s = session;
     if (s == null) return;
     final base = withGeometryOf(autoBase ?? emptyRecipe(), recipe);
@@ -574,12 +643,16 @@ class EditorController extends ChangeNotifier {
       afterB64: after,
       currentRecipe: current,
       request: aiRequest,
+      followUp: followUp,
     );
     final v = plan.variations.first;
     final r = v.toRecipe(current);
-    r['name'] = '${current['name'] ?? 'AI 보정'} · 다듬음';
+    aiRound++;
+    final label = followUp.trim().isEmpty ? '다듬기' : followUp.trim();
+    r['name'] = '$aiRound차 · ${label.length > 14 ? '${label.substring(0, 14)}…' : label}';
+    if (v.reason.isNotEmpty) r['description'] = v.reason;
     final thumbs = await _thumbs([r]);
-    aiThumbs = [...thumbs, ...aiThumbs.where((t) => t.name != r['name'])];
+    aiThumbs = [...thumbs, ...aiThumbs];
     if (plan.analysis.isNotEmpty) aiAnalysis = plan.analysis;
     pickAiVariation(r);
   }

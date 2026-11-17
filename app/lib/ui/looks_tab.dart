@@ -31,6 +31,33 @@ Widget _grid(List<Widget> cards, {int columns = 3}) => GridView.count(
     );
 
 /// Strength slider + why the look was fitted the way it was.
+/// Ask for a name and save the current edit as one of "내 룩" (a reusable template).
+Future<bool> saveLookDialog(BuildContext context, EditorController c) async {
+  final ctrl = TextEditingController(text: (c.recipe['name'] as String?) ?? '');
+  final name = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('내 룩으로 저장'),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: '룩 이름')),
+        const SizedBox(height: 10),
+        const Text('지금 보정값을 템플릿으로 저장해서, 다른 사진에도 룩 탭 → 내 룩에서 바로 쓸 수 있어요.',
+            style: TextStyle(color: textDim, fontSize: 12, height: 1.5)),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('저장')),
+      ],
+    ),
+  );
+  if (name == null || name.isEmpty) return false;
+  await c.saveUserTemplate(name);
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('"$name"을(를) 내 룩에 저장했어요')));
+  }
+  return true;
+}
+
 class LookStrengthBar extends StatelessWidget {
   const LookStrengthBar(this.c, {super.key});
   final EditorController c;
@@ -140,22 +167,7 @@ class _LooksPanelState extends State<LooksPanel> {
   EditorController get c => widget.c;
 
   Future<void> _saveLook() async {
-    final ctrl = TextEditingController(text: (c.recipe['name'] as String?) ?? '');
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('내 룩으로 저장'),
-        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: '룩 이름')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('저장')),
-        ],
-      ),
-    );
-    if (name != null && name.isNotEmpty) {
-      await c.saveUserTemplate(name);
-      setState(() => filter = '내 룩');
-    }
+    if (await saveLookDialog(context, c)) setState(() => filter = '내 룩');
   }
 
   Future<void> _importLook() async {
@@ -322,6 +334,7 @@ class _AiPanelState extends State<AiPanel> {
   @override
   void dispose() {
     _request.dispose();
+    _followUp.dispose();
     super.dispose();
   }
 
@@ -361,9 +374,14 @@ class _AiPanelState extends State<AiPanel> {
     return (_settings?.apiKey ?? '').isNotEmpty;
   }
 
-  Future<void> _refine() async {
+  final _followUp = TextEditingController();
+  static const followQuick = ['조금 더 약하게', '조금 더 강하게', '더 따뜻하게', '더 차갑게', '피부는 자연스럽게', '하늘을 더 깊게', '더 필름 같게'];
+
+  Future<void> _refine({String followUp = ''}) async {
     if (!await _ensureKey()) return;
-    await c.withBusy('${_settings!.provider.label} · 결과를 다시 보고 다듬는 중…', () => c.refineAi(_settings!));
+    final label = followUp.isEmpty ? '결과를 다시 보고 다듬는 중…' : '${c.aiRound + 1}차 수정 중…';
+    await c.withBusy('${_settings!.provider.label} · $label', () => c.refineAi(_settings!, followUp: followUp));
+    _followUp.clear();
   }
 
   Future<void> _pickReference() async {
@@ -511,17 +529,66 @@ class _AiPanelState extends State<AiPanel> {
                   onTap: () => c.pickAiVariation(t.recipe),
                 ),
             ], columns: 2),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-              child: OutlinedButton.icon(
-                onPressed: busy ? null : _refine,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('결과를 다시 보고 한 번 더 다듬기'),
-              ),
+            Container(
+              margin: const EdgeInsets.fromLTRB(12, 14, 12, 0),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: cardColor, border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(6)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Text('선택한 결과에서 이어서 부탁하기 · 지금 ${c.aiRound}차',
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                const Text('마음에 드는 카드를 고른 다음, 바꾸고 싶은 점만 말하면 AI가 그 결과를 이어서 고쳐요.',
+                    style: TextStyle(color: textDim, fontSize: 11.5, height: 1.45)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _followUp,
+                  minLines: 1,
+                  maxLines: 3,
+                  style: const TextStyle(fontSize: 13),
+                  onSubmitted: busy ? null : (v) => _refine(followUp: v.trim()),
+                  decoration: InputDecoration(
+                    hintText: '예) 그림자는 조금 더 밝게, 초록은 덜 진하게',
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    suffixIcon: IconButton(
+                      tooltip: '보내기',
+                      icon: const Icon(Icons.send, size: 18, color: accent),
+                      onPressed: busy ? null : () => _refine(followUp: _followUp.text.trim()),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, children: [
+                  for (final q in followQuick)
+                    ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text(q, style: const TextStyle(fontSize: 11.5)),
+                      onPressed: busy ? null : () => _refine(followUp: q),
+                    ),
+                ]),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: busy ? null : () => _refine(),
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: const Text('AI가 다시 보고 다듬기'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: busy ? null : () => saveLookDialog(context, c),
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 16),
+                      label: const Text('내 룩으로 저장'),
+                    ),
+                  ),
+                ]),
+              ]),
             ),
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Text('AI가 정한 값은 빛·색·커브·그레이딩 탭의 슬라이더에 그대로 들어가 있어서 이어서 손볼 수 있어요.',
+              child: Text('AI가 정한 값은 빛·색·커브·그레이딩 탭의 슬라이더에 그대로 들어가 있어서 직접 이어서 손볼 수도 있어요.',
                   style: TextStyle(color: textDim, fontSize: 11.5, height: 1.5)),
             ),
           ],

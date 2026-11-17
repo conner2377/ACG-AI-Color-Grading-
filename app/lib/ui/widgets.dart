@@ -3,17 +3,31 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-// Design tokens: one calm graphite theme with a single amber accent ("darkroom").
-const accent = Color(0xFFE3A857);
-const accentDim = Color(0x33E3A857);
+// Design tokens, taken from a camera body: matte black body, graphite top plate,
+// white engraved labels, monospace EVF-style readouts, and one signal-orange accent
+// (the color of a shutter / record button).
+const accent = Color(0xFFEC5B2B);
+const accentDim = Color(0x2EEC5B2B);
 const accent2 = accent;
 const accentGradient = LinearGradient(colors: [accent, accent]);
-const bgColor = Color(0xFF111113);
-const surfaceColor = Color(0xFF18191C);
-const cardColor = Color(0xFF212226);
-const borderColor = Color(0xFF2C2E33);
-const textDim = Color(0xFF8D9099);
-const onAccent = Color(0xFF1A1307);
+const bgColor = Color(0xFF0D0D0E);
+const surfaceColor = Color(0xFF141416);
+const cardColor = Color(0xFF1C1D1F);
+const borderColor = Color(0xFF28292C);
+const textDim = Color(0xFF8A8C92);
+const onAccent = Color(0xFFFFFFFF);
+const plateGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [Color(0xFF1B1C1E), Color(0xFF111213)],
+);
+
+/// EVF-style readout text (slider values, counters).
+const readout = TextStyle(
+  fontFamily: 'Consolas',
+  fontFamilyFallback: ['Menlo', 'DejaVu Sans Mono', 'monospace'],
+  fontFeatures: [ui.FontFeature.tabularFigures()],
+);
 
 /// Labeled slider. Double-tap the label to reset.
 class AdjustSlider extends StatelessWidget {
@@ -42,14 +56,17 @@ class AdjustSlider extends StatelessWidget {
   Widget build(BuildContext context) {
     final shown = display?.call(value) ?? (value * 100).round().toString();
     final bipolar = track == null && reset > min && reset < max;
+    final t = (value.clamp(min, max) - min) / (max - min);
+    final origin = bipolar ? (reset.clamp(min, max) - min) / (max - min) : 0.0;
     final slider = SliderTheme(
       data: SliderTheme.of(context).copyWith(
-        trackHeight: 3,
+        trackHeight: 2,
         trackShape: const RoundedRectSliderTrackShape(),
-        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6, elevation: 0),
-        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-        activeTrackColor: track == null && !bipolar ? accent : Colors.transparent,
-        inactiveTrackColor: track == null && !bipolar ? Colors.white12 : Colors.transparent,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5.5, elevation: 0),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 13),
+        overlayColor: accentDim,
+        activeTrackColor: Colors.transparent,
+        inactiveTrackColor: Colors.transparent,
         thumbColor: Colors.white,
       ),
       child: Slider(
@@ -75,11 +92,7 @@ class AdjustSlider extends StatelessWidget {
               child: Row(children: [
                 Text(label, style: TextStyle(fontSize: 12.5, color: (value - reset).abs() < 1e-6 ? Colors.white70 : Colors.white)),
                 const Spacer(),
-                Text(shown,
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: (value - reset).abs() < 1e-6 ? textDim : accent,
-                        fontFeatures: const [ui.FontFeature.tabularFigures()])),
+                Text(shown, style: readout.copyWith(fontSize: 12.5, color: (value - reset).abs() < 1e-6 ? textDim : accent)),
               ]),
             ),
           ),
@@ -92,43 +105,47 @@ class AdjustSlider extends StatelessWidget {
               ),
               slider,
             ])
-          else if (bipolar)
-            // Two-sided sliders fill from the middle toward the thumb.
+          else
+            // Dial-style scale: fine ticks under a hairline track, filled from the
+            // origin (center for two-sided sliders) toward the thumb.
             Stack(alignment: Alignment.center, children: [
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: CustomPaint(
-                  size: const Size(double.infinity, 4),
-                  painter: _CenterFillPainter((value.clamp(min, max) - min) / (max - min), (reset.clamp(min, max) - min) / (max - min)),
-                ),
+                child: CustomPaint(size: const Size(double.infinity, 12), painter: _ScalePainter(t, origin)),
               ),
               slider,
-            ])
-          else
-            slider,
+            ]),
         ],
       ),
     );
   }
 }
 
-class _CenterFillPainter extends CustomPainter {
-  _CenterFillPainter(this.t, this.origin);
+class _ScalePainter extends CustomPainter {
+  _ScalePainter(this.t, this.origin);
   final double t, origin;
   @override
   void paint(Canvas canvas, Size size) {
-    final r = Radius.circular(size.height / 2);
-    canvas.drawRRect(RRect.fromRectAndRadius(Offset.zero & size, r), Paint()..color = Colors.white12);
+    final mid = size.height / 2;
+    canvas.drawRect(Rect.fromLTWH(0, mid - 1, size.width, 2), Paint()..color = Colors.white12);
+    final tick = Paint()
+      ..color = const Color(0x59FFFFFF)
+      ..strokeWidth = 1;
+    const n = 20;
+    for (var i = 0; i <= n; i++) {
+      final x = size.width * i / n;
+      final major = i % 5 == 0;
+      canvas.drawLine(Offset(x, mid + 3), Offset(x, mid + (major ? 7 : 5)), tick);
+    }
     final a = origin * size.width, b = t * size.width;
     if ((a - b).abs() > 0.5) {
-      canvas.drawRRect(
-          RRect.fromRectAndRadius(Rect.fromLTRB(a < b ? a : b, 0, a < b ? b : a, size.height), r), Paint()..color = accent);
+      canvas.drawRect(Rect.fromLTRB(a < b ? a : b, mid - 1, a < b ? b : a, mid + 1), Paint()..color = accent);
     }
-    canvas.drawRect(Rect.fromLTWH(a - 1, -2, 2, size.height + 4), Paint()..color = Colors.white30);
+    if (origin > 0) canvas.drawRect(Rect.fromLTWH(a - 0.75, mid - 5, 1.5, 4), Paint()..color = Colors.white54);
   }
 
   @override
-  bool shouldRepaint(_CenterFillPainter old) => old.t != t || old.origin != origin;
+  bool shouldRepaint(_ScalePainter old) => old.t != t || old.origin != origin;
 }
 
 const hueGradient = LinearGradient(colors: [
@@ -436,7 +453,7 @@ class PanelLabel extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 12, 4),
         child: Row(children: [
-          Text(text, style: const TextStyle(color: textDim, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6)),
+          Text(text, style: const TextStyle(color: Color(0xFFA9ABB1), fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 1.4)),
           const SizedBox(width: 8),
           const Expanded(child: Divider(color: borderColor, height: 1)),
           if (trailing != null) ...[const SizedBox(width: 8), trailing!],

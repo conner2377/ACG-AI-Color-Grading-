@@ -132,9 +132,11 @@ Taste:
 ''';
 
 const _refinePrompt = '''
-Look again. The FIRST image is the photo before your edit (baseline), the SECOND is the
-result of your edit. Compare them against the request and fix what is still off (too strong,
-too weak, color cast, clipped highlights, muddy shadows, unnatural skin). Return the same JSON
+Look again. The FIRST image is the photo before editing (baseline), the SECOND is the
+current edit. If the user gives a FOLLOW-UP request, change the current edit to satisfy it
+while keeping everything else they already liked. Without one, compare against the original
+request and fix what is still off (too strong, too weak, color cast, clipped highlights,
+muddy shadows, unnatural skin). Return the same JSON
 format with EXACTLY 1 variation whose "adjust" values are DELTAS on top of the SECOND image,
 and absolute hsl/grade/curve values only if you change them. If it already looks right, return
 small or empty adjust. Put what you changed in "reason".
@@ -214,11 +216,13 @@ class AiService {
     required String afterB64,
     required Map<String, dynamic> currentRecipe,
     String request = '',
+    String followUp = '',
   }) async {
     _checkKey();
     final r = cloneRecipe(currentRecipe)..remove('lut');
     final prompt = 'Current edit values: ${jsonEncode(r)}\n'
-        'User request: ${request.trim().isEmpty ? '(none) 가장 좋아 보이게' : request}';
+        'Original request: ${request.trim().isEmpty ? '(none) 가장 좋아 보이게' : request}\n'
+        '${followUp.trim().isEmpty ? 'No follow-up: just review and polish.' : 'FOLLOW-UP request on the current edit: $followUp'}';
     final text = await _ask('$_systemPrompt\n$_refinePrompt', prompt, [beforeB64, afterB64]);
     return AiPlan.fromJson(_extractJson(text), max: 1);
   }

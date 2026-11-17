@@ -31,7 +31,13 @@ class _Shot {
 }
 
 class OrganizerPage extends StatefulWidget {
-  const OrganizerPage({super.key, this.initialFolder});
+  const OrganizerPage({super.key, this.initialFolder, this.embedded = false, this.onEditPhoto});
+
+  /// Shown as a main tab of the app (no back button) instead of a pushed page.
+  final bool embedded;
+
+  /// Open a photo in the editor ("이 사진 보정하기").
+  final ValueChanged<String>? onEditPhoto;
 
   /// Folder to scan right away (e.g. a folder dropped on the start screen).
   final String? initialFolder;
@@ -208,9 +214,14 @@ class _OrganizerPageState extends State<OrganizerPage> {
         index: index,
         selected: selected,
         onToggle: (path) => _toggle(path),
-        onEdit: (path) => Navigator.of(context)
-          ..pop()
-          ..pop(path),
+        onEdit: (path) {
+          Navigator.of(context).pop();
+          if (widget.onEditPhoto != null) {
+            widget.onEditPhoto!(path);
+          } else {
+            Navigator.of(context).pop(path);
+          }
+        },
       ),
     );
     setState(() {});
@@ -259,10 +270,15 @@ class _OrganizerPageState extends State<OrganizerPage> {
         padding: const EdgeInsets.symmetric(horizontal: 8),
         decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: borderColor))),
         child: Row(children: [
-          IconButton(tooltip: '돌아가기', onPressed: () => Navigator.pop(context), icon: const Icon(Icons.arrow_back, size: 20)),
-          const SizedBox(width: 4),
-          const Text('사진 정리', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          if (!widget.embedded) ...[
+            IconButton(tooltip: '돌아가기', onPressed: () => Navigator.pop(context), icon: const Icon(Icons.arrow_back, size: 20)),
+            const SizedBox(width: 4),
+            const Text('사진 정리', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          ] else
+            const SizedBox(width: 8),
           const SizedBox(width: 12),
+          if (folder == null && widget.embedded)
+            const Text('연사 중 베스트 컷 고르기 · 남길 사진만 새 폴더로', style: TextStyle(color: textDim, fontSize: 12.5)),
           if (folder != null)
             Flexible(
               child: Text(folder!, overflow: TextOverflow.ellipsis, style: const TextStyle(color: textDim, fontSize: 12.5)),

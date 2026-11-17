@@ -67,6 +67,13 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   void _onChange() {
+    if (c.notice != null) {
+      final msg = c.notice!;
+      c.notice = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+      });
+    }
     if (c.error != null) {
       final msg = c.error!;
       c.error = null;
@@ -80,6 +87,7 @@ class _EditorPageState extends State<EditorPage> {
   @override
   void dispose() {
     c.removeListener(_onChange);
+    c.flushAutosave();
     c.session?.close();
     super.dispose();
   }
@@ -99,9 +107,45 @@ class _EditorPageState extends State<EditorPage> {
     if (f != null) await _openPath(f.path);
   }
 
-  Future<void> _organize() async {
-    final path = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => const OrganizerPage()));
-    if (path != null) await _openPath(path);
+  /// 0 = 보정 (start screen / editor), 1 = 사진 정리.
+  int mode = 0;
+
+  void _organize() => setState(() => mode = 1);
+
+  Future<void> _editFromOrganizer(String path) async {
+    setState(() => mode = 0);
+    await _openPath(path);
+  }
+
+  Future<void> _saveWork() async {
+    if (!c.hasPhoto) return;
+    final now = DateTime.now();
+    final ctrl = TextEditingController(
+        text: '${(c.recipe['name'] as String?)?.isNotEmpty == true ? '${c.recipe['name']} · ' : ''}'
+            '${now.month}/${now.day} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('작업 저장'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: '이름')),
+          const SizedBox(height: 10),
+          const Text('이 사진의 지금 보정 상태를 저장해요. 나중에 사진을 다시 열고 "저장한 작업"에서 언제든 불러올 수 있어요. '
+              '마지막 작업은 따로 저장하지 않아도 자동으로 이어져요.',
+              style: TextStyle(color: textDim, fontSize: 12, height: 1.5)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('저장')),
+        ],
+      ),
+    );
+    if (name != null && name.isNotEmpty) await c.saveWork(name);
+  }
+
+  Future<void> _savedWorks() async {
+    if (!c.hasPhoto) return;
+    await showDialog<void>(context: context, builder: (_) => _SavedWorksDialog(c: c, onSaveNew: _saveWork));
   }
 
   void _toggleCompare() {
@@ -234,7 +278,7 @@ class _EditorPageState extends State<EditorPage> {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.8, color: accent)),
                   const SizedBox(width: 10),
-                  Text(c.busy!, style: const TextStyle(fontSize: 12.5)),
+                  Text(c.busy!, style: readout.copyWith(fontSize: 12.5)),
                 ]),
               ),
             ),
@@ -303,49 +347,84 @@ class _EditorPageState extends State<EditorPage> {
         icon: Icon(icon, size: 19, color: active ? accent : null),
       );
 
+  Widget _modeTab(String label, IconData icon, int m, bool wide) {
+    final on = mode == m;
+    return InkWell(
+      onTap: () => setState(() => mode = m),
+      child: Container(
+        height: 52,
+        padding: EdgeInsets.symmetric(horizontal: wide ? 14 : 7),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: on ? accent : Colors.transparent, width: 2))),
+        child: Row(children: [
+          if (wide) ...[Icon(icon, size: 17, color: on ? accent : textDim), const SizedBox(width: 7)],
+          Text(label,
+              style: TextStyle(fontSize: 13.5, fontWeight: on ? FontWeight.w700 : FontWeight.w500, color: on ? Colors.white : textDim)),
+        ]),
+      ),
+    );
+  }
+
   Widget _topBar(bool wide) {
-    final has = c.hasPhoto;
+    final has = c.hasPhoto && mode == 0;
     return Container(
       height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: const BoxDecoration(color: bgColor, border: Border(bottom: BorderSide(color: borderColor))),
+      padding: const EdgeInsets.only(left: 10, right: 10),
+      decoration: const BoxDecoration(
+        gradient: plateGradient,
+        border: Border(top: BorderSide(color: Color(0xFF2E2F33)), bottom: BorderSide(color: Colors.black)),
+      ),
       child: Row(children: [
         InkWell(
           borderRadius: BorderRadius.circular(6),
-          onTap: has ? c.closePhoto : null,
-          child: const Padding(padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4), child: AcgLogo(size: 15)),
+          onTap: () {
+            setState(() => mode = 0);
+            if (c.hasPhoto) c.closePhoto();
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: AcgLogo(size: 15, showText: wide),
+          ),
         ),
-        SizedBox(width: wide ? 8 : 0),
-        _iconBtn('사진 열기 (Ctrl+O)', Icons.folder_open_outlined, _open),
-        if (wide || !has) _iconBtn('폴더 사진 정리', Icons.photo_library_outlined, _organize),
+        SizedBox(width: wide ? 18 : 2),
+        _modeTab('보정', Icons.tune, 0, wide),
+        _modeTab('사진 정리', Icons.photo_library_outlined, 1, wide),
         if (has && wide)
           Flexible(
             child: Padding(
-              padding: const EdgeInsets.only(left: 8),
+              padding: const EdgeInsets.only(left: 16),
               child: Text(p.basename(c.path!),
                   overflow: TextOverflow.ellipsis, style: const TextStyle(color: textDim, fontSize: 12.5)),
             ),
           ),
         const Spacer(),
+        if (mode == 0 && wide) _iconBtn('사진 열기 (Ctrl+O)', Icons.folder_open_outlined, _open),
         if (has) ...[
           _iconBtn('되돌리기 (Ctrl+Z)', Icons.undo, c.canUndo ? c.undo : null),
-          _iconBtn('다시 하기 (Ctrl+Y)', Icons.redo, c.canRedo ? c.redo : null),
+          if (wide) _iconBtn('다시 하기 (Ctrl+Y)', Icons.redo, c.canRedo ? c.redo : null),
           if (wide) _iconBtn('처음으로', Icons.restart_alt, c.reset),
-          const SizedBox(width: 4),
           _iconBtn('전후 비교 (\\)', Icons.compare, _toggleCompare, active: c.compareSplit),
-          if (wide)
-            _iconBtn('같은 룩으로 여러 장 저장', Icons.photo_library_outlined, _batch)
-          else
+          if (wide) ...[
+            _iconBtn('작업 저장 (Ctrl+S)', Icons.bookmark_add_outlined, _saveWork),
+            _iconBtn('저장한 작업 ${c.savedWorks.isEmpty ? '' : '(${c.savedWorks.length})'}', Icons.history, _savedWorks),
+            _iconBtn('같은 보정으로 여러 장 내보내기', Icons.burst_mode_outlined, _batch),
+          ] else
             PopupMenuButton<int>(
               icon: const Icon(Icons.more_horiz, size: 19),
-              onSelected: (v) => v == 0 ? c.reset() : _batch(),
+              onSelected: (v) => switch (v) {
+                0 => c.reset(),
+                1 => _saveWork(),
+                2 => _savedWorks(),
+                _ => _batch(),
+              },
               itemBuilder: (_) => const [
+                PopupMenuItem(value: 1, child: Text('작업 저장')),
+                PopupMenuItem(value: 2, child: Text('저장한 작업')),
                 PopupMenuItem(value: 0, child: Text('처음으로')),
-                PopupMenuItem(value: 1, child: Text('같은 룩으로 여러 장 저장')),
+                PopupMenuItem(value: 3, child: Text('여러 장 내보내기')),
               ],
             ),
           SizedBox(width: wide ? 8 : 2),
-          GradientButton(label: '저장', icon: wide ? Icons.download : null, onPressed: _export),
+          GradientButton(label: '내보내기', icon: wide ? Icons.ios_share : null, onPressed: _export),
         ],
       ]),
     );
@@ -393,6 +472,7 @@ class _EditorPageState extends State<EditorPage> {
         const SingleActivator(LogicalKeyboardKey.keyY, control: true): c.redo,
         const SingleActivator(LogicalKeyboardKey.keyO, control: true): _open,
         const SingleActivator(LogicalKeyboardKey.keyE, control: true): _export,
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true): _saveWork,
         const SingleActivator(LogicalKeyboardKey.backslash): _toggleCompare,
       },
       child: Focus(
@@ -401,6 +481,7 @@ class _EditorPageState extends State<EditorPage> {
           backgroundColor: bgColor,
           body: SafeArea(
             child: DropTarget(
+              enable: mode == 0,
               onDragEntered: (_) => setState(() => dragOver = true),
               onDragExited: (_) => setState(() => dragOver = false),
               onDragDone: (d) {
@@ -411,7 +492,15 @@ class _EditorPageState extends State<EditorPage> {
                 foregroundDecoration: BoxDecoration(
                   border: Border.all(color: dragOver ? accent : Colors.transparent, width: 2),
                 ),
-                child: Column(children: [_topBar(wide), Expanded(child: body)]),
+                child: Column(children: [
+                  _topBar(wide),
+                  Expanded(
+                    child: IndexedStack(index: mode, children: [
+                      body,
+                      OrganizerPage(embedded: true, onEditPhoto: _editFromOrganizer),
+                    ]),
+                  ),
+                ]),
               ),
             ),
           ),
@@ -429,24 +518,27 @@ class _RailItem extends StatelessWidget {
   final bool compact;
   @override
   Widget build(BuildContext context) {
-    final color = selected ? accent : textDim;
+    final color = selected ? Colors.white : textDim;
     return Tooltip(
       message: tool.$3,
       waitDuration: const Duration(milliseconds: 600),
       child: InkWell(
         onTap: onTap,
         child: Container(
-          padding: EdgeInsets.symmetric(vertical: compact ? 6 : 9),
-          decoration: BoxDecoration(
-            border: compact
-                ? Border(bottom: BorderSide(color: selected ? accent : Colors.transparent, width: 2))
-                : Border(right: BorderSide(color: selected ? accent : Colors.transparent, width: 2)),
-          ),
+          padding: EdgeInsets.symmetric(vertical: compact ? 5 : 8),
+          color: selected ? const Color(0xFF1A1B1D) : null,
+          // Like a mode dial: the selected tool gets the orange index mark.
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(tool.$2, size: 20, color: color),
             const SizedBox(height: 4),
             Text(tool.$1,
                 style: TextStyle(fontSize: 10.5, color: selected ? Colors.white : textDim, fontWeight: selected ? FontWeight.w600 : null)),
+            const SizedBox(height: 4),
+            Container(
+              width: 4,
+              height: 4,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: selected ? accent : Colors.transparent),
+            ),
           ]),
         ),
       ),
@@ -454,186 +546,144 @@ class _RailItem extends StatelessWidget {
   }
 }
 
-/// Wordmark: amber square mark + "ACG".
+/// Wordmark: a lens ring with a shutter-orange center + "ACG".
 class AcgLogo extends StatelessWidget {
-  const AcgLogo({super.key, this.size = 15});
+  const AcgLogo({super.key, this.size = 15, this.showText = true});
   final double size;
+  final bool showText;
   @override
   Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
         Container(
-          width: size * 1.35,
-          height: size * 1.35,
-          decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(size * 0.3)),
-          child: Icon(Icons.blur_on, size: size, color: onAccent),
+          width: size * 1.3,
+          height: size * 1.3,
+          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white70, width: size * 0.1)),
+          alignment: Alignment.center,
+          child: Container(
+            width: size * 0.5,
+            height: size * 0.5,
+            decoration: const BoxDecoration(shape: BoxShape.circle, color: accent),
+          ),
         ),
-        SizedBox(width: size * 0.55),
-        Text('ACG', style: TextStyle(fontSize: size, fontWeight: FontWeight.w800, letterSpacing: size * 0.12)),
+        if (showText) ...[
+          SizedBox(width: size * 0.55),
+          Text('ACG', style: TextStyle(fontSize: size, fontWeight: FontWeight.w800, letterSpacing: size * 0.18)),
+        ],
       ]);
 }
 
 // ------------------------------------------------------------------ start screen
 
-/// First screen: a full-bleed photo (the last one you edited) with one line about light
-/// and color, the two entry points (edit a photo, organize a folder) and recent photos.
-class StartScreen extends StatefulWidget {
+/// First screen, kept plain: the mark, the two main actions and recent photos.
+class StartScreen extends StatelessWidget {
   const StartScreen({super.key, required this.c, required this.onOpen, required this.onOpenPath, required this.onOrganize});
   final EditorController c;
   final VoidCallback onOpen;
   final ValueChanged<String> onOpenPath;
   final VoidCallback onOrganize;
-  @override
-  State<StartScreen> createState() => _StartScreenState();
-}
 
-class _StartScreenState extends State<StartScreen> {
   @override
   Widget build(BuildContext context) {
-    final recent = widget.c.recent;
-    final cover = recent.isEmpty ? null : recent.first;
-    return LayoutBuilder(builder: (context, box) {
-      final wide = box.maxWidth >= 900;
-      final pad = wide ? 72.0 : 24.0;
-      return Stack(fit: StackFit.expand, children: [
-        // Backdrop: the last photo, or a warm darkroom gradient.
-        if (cover != null)
-          Image.file(
-            File(cover),
-            fit: BoxFit.cover,
-            cacheWidth: 1600,
-            filterQuality: FilterQuality.medium,
-            errorBuilder: (_, _, _) => const _DarkroomGradient(),
-          )
-        else
-          const _DarkroomGradient(),
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [Color(0xF2101012), Color(0xCC101012), Color(0x55101012)],
-              stops: [0, 0.45, 1],
-            ),
-          ),
-        ),
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0x00101012), Color(0x00101012), Color(0xF0101012)],
-              stops: [0, 0.55, 1],
-            ),
-          ),
-        ),
-        SingleChildScrollView(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: box.maxHeight),
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(pad, wide ? 64 : 32, pad, 28),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('ACG  ·  AI COLOR GRADING',
-                        style: TextStyle(color: accent, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 2.4)),
-                    const SizedBox(height: 22),
-                    Text('셔터는 순간을 담고,\n색은 그날의 공기를 기억해요.',
-                        style: TextStyle(
-                            fontSize: wide ? 38 : 28, fontWeight: FontWeight.w300, height: 1.35, letterSpacing: -0.6, color: Colors.white)),
-                    const SizedBox(height: 18),
-                    const Text('AI가 사진의 빛과 장면을 읽고 색을 맞춰요. 원하는 느낌을 말로 부탁해도 돼요.\n픽셀은 다시 그리지 않으니 원본 화질 그대로예요.',
-                        style: TextStyle(color: Color(0xFFB9BBC2), fontSize: 14, height: 1.65)),
-                    const SizedBox(height: 30),
-                    Wrap(spacing: 10, runSpacing: 10, children: [
-                      FilledButton.icon(
-                        onPressed: widget.onOpen,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: accent,
-                          foregroundColor: onAccent,
-                          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        ),
-                        icon: const Icon(Icons.add_photo_alternate_outlined, size: 19),
-                        label: const Text('사진 열기', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: widget.onOrganize,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: const BorderSide(color: Color(0x66FFFFFF)),
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                        ),
-                        icon: const Icon(Icons.photo_library_outlined, size: 19),
-                        label: const Text('폴더 사진 정리', style: TextStyle(fontSize: 14)),
-                      ),
-                    ]),
-                    const SizedBox(height: 12),
-                    const Text('사진을 창에 끌어다 놓아도 열려요 · Ctrl+O', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
-                    const SizedBox(height: 34),
-                    const Wrap(spacing: 8, runSpacing: 8, children: [
-                      _Pill(Icons.auto_awesome, 'AI 분석 보정'),
-                      _Pill(Icons.chat_bubble_outline, '말로 부탁하는 보정'),
-                      _Pill(Icons.burst_mode_outlined, '연사 중 베스트 컷 고르기'),
-                      _Pill(Icons.high_quality_outlined, '16비트 원본 화질'),
-                    ]),
-                  ]),
-                ),
-                if (recent.isNotEmpty) ...[
-                  const SizedBox(height: 40),
-                  const Text('최근 사진', style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 96,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: recent.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 8),
-                      itemBuilder: (_, i) => _RecentTile(path: recent[i], onTap: () => widget.onOpenPath(recent[i])),
-                    ),
-                  ),
-                ],
+    final recent = c.recent;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const AcgLogo(size: 26),
+            const SizedBox(height: 14),
+            const Text('AI COLOR GRADING', style: TextStyle(color: textDim, fontSize: 11, letterSpacing: 3, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 40),
+            Wrap(spacing: 12, runSpacing: 12, alignment: WrapAlignment.center, children: [
+              _StartAction(
+                icon: Icons.tune,
+                title: '사진 보정',
+                subtitle: '사진을 열거나 끌어다 놓기 · Ctrl+O',
+                primary: true,
+                onTap: onOpen,
+              ),
+              _StartAction(
+                icon: Icons.photo_library_outlined,
+                title: '사진 정리',
+                subtitle: '폴더에서 베스트 컷 고르기',
+                onTap: onOrganize,
+              ),
+            ]),
+            if (recent.isNotEmpty) ...[
+              const SizedBox(height: 48),
+              Row(children: [
+                const Text('최근 사진', style: TextStyle(color: Color(0xFFA9ABB1), fontSize: 10.5, letterSpacing: 1.4, fontWeight: FontWeight.w700)),
+                const SizedBox(width: 10),
+                const Expanded(child: Divider(color: borderColor, height: 1)),
               ]),
-            ),
-          ),
+              const SizedBox(height: 14),
+              SizedBox(
+                height: 92,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: recent.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (_, i) => _RecentTile(path: recent[i], onTap: () => onOpenPath(recent[i])),
+                ),
+              ),
+            ],
+          ]),
         ),
-      ]);
-    });
+      ),
+    );
   }
 }
 
-class _DarkroomGradient extends StatelessWidget {
-  const _DarkroomGradient();
+class _StartAction extends StatefulWidget {
+  const _StartAction({required this.icon, required this.title, required this.subtitle, required this.onTap, this.primary = false});
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final bool primary;
   @override
-  Widget build(BuildContext context) => const DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0.7, -0.3),
-            radius: 1.2,
-            colors: [Color(0xFF4A3420), Color(0xFF1E1914), Color(0xFF101012)],
-            stops: [0, 0.45, 1],
-          ),
-        ),
-      );
+  State<_StartAction> createState() => _StartActionState();
 }
 
-class _Pill extends StatelessWidget {
-  const _Pill(this.icon, this.text);
-  final IconData icon;
-  final String text;
+class _StartActionState extends State<_StartAction> {
+  bool hover = false;
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0x33000000),
-          border: Border.all(color: const Color(0x33FFFFFF)),
-          borderRadius: BorderRadius.circular(20),
+  Widget build(BuildContext context) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => hover = true),
+        onExit: (_) => setState(() => hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: 300,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: plateGradient,
+              border: Border.all(color: hover ? accent : borderColor),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: widget.primary ? accent : const Color(0xFF26272A),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(widget.icon, size: 20, color: Colors.white),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(widget.title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 3),
+                  Text(widget.subtitle, style: const TextStyle(color: textDim, fontSize: 12)),
+                ]),
+              ),
+            ]),
+          ),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 14, color: accent),
-          const SizedBox(width: 6),
-          Text(text, style: const TextStyle(fontSize: 12, color: Color(0xE6FFFFFF))),
-        ]),
       );
 }
 
@@ -676,6 +726,66 @@ class _RecentTileState extends State<_RecentTile> {
           ),
         ),
       );
+}
+
+class _SavedWorksDialog extends StatefulWidget {
+  const _SavedWorksDialog({required this.c, required this.onSaveNew});
+  final EditorController c;
+  final Future<void> Function() onSaveNew;
+  @override
+  State<_SavedWorksDialog> createState() => _SavedWorksDialogState();
+}
+
+class _SavedWorksDialogState extends State<_SavedWorksDialog> {
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.c;
+    String t(DateTime d) => '${d.year}.${d.month}.${d.day} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+    return AlertDialog(
+      title: const Text('저장한 작업'),
+      content: SizedBox(
+        width: 420,
+        child: c.savedWorks.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text('이 사진에 저장한 작업이 아직 없어요. Ctrl+S로 지금 상태를 저장할 수 있어요.',
+                    style: TextStyle(color: textDim, fontSize: 13, height: 1.5)),
+              )
+            : ListView(shrinkWrap: true, children: [
+                for (final w in c.savedWorks)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.bookmark_outline, color: accent, size: 20),
+                    title: Text(w.name, style: const TextStyle(fontSize: 13.5)),
+                    subtitle: Text(t(w.time), style: const TextStyle(fontSize: 11.5, color: textDim)),
+                    onTap: () {
+                      c.loadWork(w);
+                      Navigator.pop(context);
+                    },
+                    trailing: IconButton(
+                      tooltip: '삭제',
+                      icon: const Icon(Icons.delete_outline, size: 18, color: textDim),
+                      onPressed: () async {
+                        await c.deleteWork(w);
+                        setState(() {});
+                      },
+                    ),
+                  ),
+              ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('닫기')),
+        FilledButton.icon(
+          onPressed: () async {
+            await widget.onSaveNew();
+            setState(() {});
+          },
+          icon: const Icon(Icons.bookmark_add_outlined, size: 17),
+          label: const Text('지금 작업 저장'),
+        ),
+      ],
+    );
+  }
 }
 
 class _LeftClipper extends CustomClipper<Rect> {
