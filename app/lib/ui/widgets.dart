@@ -3,24 +3,25 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-// Design tokens, taken from a camera body: matte black body, graphite top plate,
-// white engraved labels, monospace EVF-style readouts, and one signal-orange accent
-// (the color of a shutter / record button).
-const accent = Color(0xFFEC5B2B);
-const accentDim = Color(0x2EEC5B2B);
-const accent2 = accent;
-const accentGradient = LinearGradient(colors: [accent, accent]);
-const bgColor = Color(0xFF0D0D0E);
-const surfaceColor = Color(0xFF141416);
-const cardColor = Color(0xFF1C1D1F);
-const borderColor = Color(0xFF28292C);
-const textDim = Color(0xFF8A8C92);
-const onAccent = Color(0xFFFFFFFF);
-const plateGradient = LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [Color(0xFF1B1C1E), Color(0xFF111213)],
+// Design tokens: a soft, slightly violet-tinted dark UI with one violet accent.
+// Camera details (aperture mark, viewfinder corners, AF-point selection, dial ticks)
+// are used sparingly as accents, not as decoration everywhere.
+const accent = Color(0xFF8B6CFF);
+const accentDim = Color(0x298B6CFF);
+const accent2 = Color(0xFF6E4BFF);
+const accentGradient = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFF9B7DFF), Color(0xFF6E4BFF)],
 );
+const bgColor = Color(0xFF0B0B0F);
+const surfaceColor = Color(0xFF121218);
+const cardColor = Color(0xFF1A1A22);
+const borderColor = Color(0xFF25252F);
+const textDim = Color(0xFF8E8E9E);
+const onAccent = Color(0xFFFFFFFF);
+const plateGradient = LinearGradient(colors: [surfaceColor, surfaceColor]);
+const radius = 12.0;
 
 /// EVF-style readout text (slider values, counters).
 const readout = TextStyle(
@@ -127,9 +128,10 @@ class _ScalePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final mid = size.height / 2;
-    canvas.drawRect(Rect.fromLTWH(0, mid - 1, size.width, 2), Paint()..color = Colors.white12);
+    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(0, mid - 1.5, size.width, 3), const Radius.circular(2)),
+        Paint()..color = Colors.white10);
     final tick = Paint()
-      ..color = const Color(0x59FFFFFF)
+      ..color = const Color(0x40FFFFFF)
       ..strokeWidth = 1;
     const n = 20;
     for (var i = 0; i <= n; i++) {
@@ -139,7 +141,9 @@ class _ScalePainter extends CustomPainter {
     }
     final a = origin * size.width, b = t * size.width;
     if ((a - b).abs() > 0.5) {
-      canvas.drawRect(Rect.fromLTRB(a < b ? a : b, mid - 1, a < b ? b : a, mid + 1), Paint()..color = accent);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(Rect.fromLTRB(a < b ? a : b, mid - 1.5, a < b ? b : a, mid + 1.5), const Radius.circular(2)),
+          Paint()..color = accent);
     }
     if (origin > 0) canvas.drawRect(Rect.fromLTWH(a - 0.75, mid - 5, 1.5, 4), Paint()..color = Colors.white54);
   }
@@ -178,7 +182,7 @@ class ThumbTile extends StatelessWidget {
             height: 96,
             decoration: BoxDecoration(
               border: Border.all(color: selected ? accent : Colors.transparent, width: 2),
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(10),
               color: Colors.white10,
             ),
             clipBehavior: Clip.antiAlias,
@@ -329,7 +333,7 @@ class HistogramView extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         height: height,
         margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        decoration: BoxDecoration(color: const Color(0xFF0E0E0E), borderRadius: BorderRadius.circular(6)),
+        decoration: BoxDecoration(color: const Color(0xFF0E0E0E), borderRadius: BorderRadius.circular(10)),
         child: data == null ? null : CustomPaint(painter: _HistPainter(data!), size: Size.infinite),
       );
 }
@@ -389,15 +393,17 @@ class LookCard extends StatelessWidget {
         child: Container(
           decoration: BoxDecoration(
             color: cardColor,
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: selected ? accent : Colors.transparent, width: 2),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: selected ? accent : Colors.transparent, width: 1.5),
           ),
           clipBehavior: Clip.antiAlias,
           child: Stack(fit: StackFit.expand, children: [
             if (image != null)
               RawImage(image: image, fit: BoxFit.cover, filterQuality: FilterQuality.medium)
             else
-              const Center(child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5))),
+              const Center(child: ApertureSpinner(size: 16)),
+            // Selected look: an AF point locked on it.
+            if (selected) const FrameCorners(color: Colors.white, length: 10, width: 2, inset: 5),
             if (favorite != null && (favorite! || onFavorite != null))
               Positioned(
                 top: 0,
@@ -505,22 +511,144 @@ class SectionCard extends StatelessWidget {
       );
 }
 
-/// Primary button: solid accent.
+/// Primary button: violet gradient, rounded.
 class GradientButton extends StatelessWidget {
   const GradientButton({super.key, required this.label, this.icon, this.onPressed});
   final String label;
   final IconData? icon;
   final VoidCallback? onPressed;
   @override
-  Widget build(BuildContext context) => FilledButton.icon(
-        onPressed: onPressed,
-        icon: icon == null ? const SizedBox.shrink() : Icon(icon, size: 17),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-        style: FilledButton.styleFrom(
-          backgroundColor: accent,
-          foregroundColor: onAccent,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+  Widget build(BuildContext context) {
+    final on = onPressed != null;
+    return Opacity(
+      opacity: on ? 1 : 0.45,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: accentGradient,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: on ? const [BoxShadow(color: Color(0x406E4BFF), blurRadius: 16, offset: Offset(0, 4))] : null,
         ),
-      );
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: onPressed,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+                if (icon != null) ...[Icon(icon, size: 17, color: Colors.white), const SizedBox(width: 8)],
+                Text(label, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13.5)),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------------------------ camera details
+
+/// Aperture iris: a ring with six blades. Used as the logo and (spinning) as the
+/// loading indicator.
+class ApertureMark extends StatelessWidget {
+  const ApertureMark({super.key, this.size = 24, this.filled = true});
+  final double size;
+  final bool filled;
+  @override
+  Widget build(BuildContext context) => SizedBox.square(dimension: size, child: CustomPaint(painter: _AperturePainter(filled)));
+}
+
+class _AperturePainter extends CustomPainter {
+  _AperturePainter(this.filled);
+  final bool filled;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.shortestSide / 2;
+    final rect = Rect.fromCircle(center: c, radius: r);
+    if (filled) canvas.drawCircle(c, r, Paint()..shader = accentGradient.createShader(rect));
+    final line = Paint()
+      ..color = filled ? Colors.white : accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(1.2, r * 0.11)
+      ..strokeCap = StrokeCap.round;
+    final inner = r * 0.62;
+    if (!filled) canvas.drawCircle(c, r - line.strokeWidth / 2, line);
+    // Six blades: each a chord from the inner hexagon out toward the rim.
+    for (var i = 0; i < 6; i++) {
+      final a = i * math.pi / 3 - math.pi / 2;
+      final p0 = c + Offset(math.cos(a), math.sin(a)) * inner * 0.55;
+      final p1 = c + Offset(math.cos(a + 0.9), math.sin(a + 0.9)) * inner;
+      canvas.drawLine(p0, p1, line);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_AperturePainter old) => old.filled != filled;
+}
+
+/// Spinning aperture used for "working…" states.
+class ApertureSpinner extends StatefulWidget {
+  const ApertureSpinner({super.key, this.size = 16});
+  final double size;
+  @override
+  State<ApertureSpinner> createState() => _ApertureSpinnerState();
+}
+
+class _ApertureSpinnerState extends State<ApertureSpinner> with SingleTickerProviderStateMixin {
+  late final _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      RotationTransition(turns: _c, child: ApertureMark(size: widget.size, filled: false));
+}
+
+/// Viewfinder / AF-point corner brackets drawn inside a box.
+class FrameCorners extends StatelessWidget {
+  const FrameCorners({super.key, this.color = Colors.white38, this.length = 14, this.width = 1.5, this.inset = 0});
+  final Color color;
+  final double length;
+  final double width;
+  final double inset;
+  @override
+  Widget build(BuildContext context) =>
+      IgnorePointer(child: CustomPaint(painter: _CornersPainter(color, length, width, inset), size: Size.infinite));
+}
+
+class _CornersPainter extends CustomPainter {
+  _CornersPainter(this.color, this.length, this.width, this.inset);
+  final Color color;
+  final double length, width, inset;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = width
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final r = (Offset.zero & size).deflate(inset + width / 2);
+    final l = math.min(length, r.shortestSide / 3);
+    for (final (o, dx, dy) in [
+      (r.topLeft, 1.0, 1.0),
+      (r.topRight, -1.0, 1.0),
+      (r.bottomLeft, 1.0, -1.0),
+      (r.bottomRight, -1.0, -1.0),
+    ]) {
+      canvas.drawPath(
+          Path()
+            ..moveTo(o.dx + l * dx, o.dy)
+            ..lineTo(o.dx, o.dy)
+            ..lineTo(o.dx, o.dy + l * dy),
+          p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CornersPainter old) => old.color != color || old.length != length || old.inset != inset;
 }

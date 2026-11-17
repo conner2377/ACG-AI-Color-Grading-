@@ -264,7 +264,9 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   Widget _viewerArea() => Stack(children: [
-        Positioned.fill(child: Padding(padding: const EdgeInsets.all(16), child: _viewer())),
+        Positioned.fill(child: Padding(padding: const EdgeInsets.all(28), child: _viewer())),
+        // Viewfinder frame lines around the photo area.
+        const Positioned.fill(child: FrameCorners(color: Color(0x33FFFFFF), length: 22, width: 1.5, inset: 12)),
         if (c.busy != null)
           Positioned(
             top: 16,
@@ -272,11 +274,15 @@ class _EditorPageState extends State<EditorPage> {
             right: 0,
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                 decoration: BoxDecoration(
-                    color: const Color(0xEE18191C), border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(6)),
+                  color: const Color(0xEE16161C),
+                  border: Border.all(color: borderColor),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 18)],
+                ),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.8, color: accent)),
+                  const ApertureSpinner(size: 15),
                   const SizedBox(width: 10),
                   Text(c.busy!, style: readout.copyWith(fontSize: 12.5)),
                 ]),
@@ -316,7 +322,7 @@ class _EditorPageState extends State<EditorPage> {
 
   /// Vertical tool rail (desktop).
   Widget _rail() => Container(
-        width: 68,
+        width: 76,
         decoration: const BoxDecoration(color: bgColor, border: Border(left: BorderSide(color: borderColor))),
         child: Material(type: MaterialType.transparency, child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
           for (var i = 0; i < _tools.length; i++) ...[
@@ -328,7 +334,7 @@ class _EditorPageState extends State<EditorPage> {
 
   /// Horizontal tool strip (narrow windows).
   Widget _strip() => SizedBox(
-        height: 58,
+        height: 66,
         child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 8), children: [
           for (var i = 0; i < _tools.length; i++)
             SizedBox(width: 62, child: _RailItem(tool: _tools[i], selected: tab == i, onTap: () => _setTab(i), compact: true)),
@@ -342,37 +348,48 @@ class _EditorPageState extends State<EditorPage> {
         onPressed: onTap,
         style: IconButton.styleFrom(
           backgroundColor: active ? accentDim : null,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
         icon: Icon(icon, size: 19, color: active ? accent : null),
       );
 
   Widget _modeTab(String label, IconData icon, int m, bool wide) {
     final on = mode == m;
-    return InkWell(
+    return GestureDetector(
       onTap: () => setState(() => mode = m),
-      child: Container(
-        height: 52,
-        padding: EdgeInsets.symmetric(horizontal: wide ? 14 : 7),
-        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: on ? accent : Colors.transparent, width: 2))),
-        child: Row(children: [
-          if (wide) ...[Icon(icon, size: 17, color: on ? accent : textDim), const SizedBox(width: 7)],
-          Text(label,
-              style: TextStyle(fontSize: 13.5, fontWeight: on ? FontWeight.w700 : FontWeight.w500, color: on ? Colors.white : textDim)),
-        ]),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: EdgeInsets.symmetric(horizontal: wide ? 14 : 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: on ? const Color(0xFF26263A) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (wide) ...[Icon(icon, size: 16, color: on ? accent : textDim), const SizedBox(width: 7)],
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: on ? FontWeight.w600 : FontWeight.w500, color: on ? Colors.white : textDim)),
+          ]),
+        ),
       ),
     );
   }
 
+  Widget _modeSwitch(bool wide) => Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(color: const Color(0xFF15151C), border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(11)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          _modeTab('보정', Icons.tune, 0, wide),
+          _modeTab('사진 정리', Icons.photo_library_outlined, 1, wide),
+        ]),
+      );
+
   Widget _topBar(bool wide) {
     final has = c.hasPhoto && mode == 0;
     return Container(
-      height: 52,
-      padding: const EdgeInsets.only(left: 10, right: 10),
-      decoration: const BoxDecoration(
-        gradient: plateGradient,
-        border: Border(top: BorderSide(color: Color(0xFF2E2F33)), bottom: BorderSide(color: Colors.black)),
-      ),
+      height: 56,
+      padding: const EdgeInsets.only(left: 12, right: 12),
+      decoration: const BoxDecoration(color: bgColor, border: Border(bottom: BorderSide(color: borderColor))),
       child: Row(children: [
         InkWell(
           borderRadius: BorderRadius.circular(6),
@@ -386,8 +403,7 @@ class _EditorPageState extends State<EditorPage> {
           ),
         ),
         SizedBox(width: wide ? 18 : 2),
-        _modeTab('보정', Icons.tune, 0, wide),
-        _modeTab('사진 정리', Icons.photo_library_outlined, 1, wide),
+        _modeSwitch(wide),
         if (has && wide)
           Flexible(
             child: Padding(
@@ -518,7 +534,7 @@ class _RailItem extends StatelessWidget {
   final bool compact;
   @override
   Widget build(BuildContext context) {
-    final color = selected ? Colors.white : textDim;
+    final color = selected ? accent : textDim;
     return Tooltip(
       message: tool.$3,
       waitDuration: const Duration(milliseconds: 600),
@@ -526,7 +542,8 @@ class _RailItem extends StatelessWidget {
         onTap: onTap,
         child: Container(
           padding: EdgeInsets.symmetric(vertical: compact ? 5 : 8),
-          color: selected ? const Color(0xFF1A1B1D) : null,
+          margin: EdgeInsets.symmetric(horizontal: compact ? 3 : 8, vertical: 2),
+          decoration: BoxDecoration(color: selected ? accentDim : null, borderRadius: BorderRadius.circular(10)),
           // Like a mode dial: the selected tool gets the orange index mark.
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(tool.$2, size: 20, color: color),
@@ -546,27 +563,17 @@ class _RailItem extends StatelessWidget {
   }
 }
 
-/// Wordmark: a lens ring with a shutter-orange center + "ACG".
+/// Wordmark: the aperture mark + "ACG".
 class AcgLogo extends StatelessWidget {
   const AcgLogo({super.key, this.size = 15, this.showText = true});
   final double size;
   final bool showText;
   @override
   Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: size * 1.3,
-          height: size * 1.3,
-          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white70, width: size * 0.1)),
-          alignment: Alignment.center,
-          child: Container(
-            width: size * 0.5,
-            height: size * 0.5,
-            decoration: const BoxDecoration(shape: BoxShape.circle, color: accent),
-          ),
-        ),
+        ApertureMark(size: size * 1.5),
         if (showText) ...[
-          SizedBox(width: size * 0.55),
-          Text('ACG', style: TextStyle(fontSize: size, fontWeight: FontWeight.w800, letterSpacing: size * 0.18)),
+          SizedBox(width: size * 0.6),
+          Text('ACG', style: TextStyle(fontSize: size * 1.05, fontWeight: FontWeight.w700, letterSpacing: size * 0.08)),
         ],
       ]);
 }
@@ -584,61 +591,79 @@ class StartScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final recent = c.recent;
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const AcgLogo(size: 26),
-            const SizedBox(height: 14),
-            const Text('AI COLOR GRADING', style: TextStyle(color: textDim, fontSize: 11, letterSpacing: 3, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 40),
-            Wrap(spacing: 12, runSpacing: 12, alignment: WrapAlignment.center, children: [
-              _StartAction(
-                icon: Icons.tune,
-                title: '사진 보정',
-                subtitle: '사진을 열거나 끌어다 놓기 · Ctrl+O',
-                primary: true,
-                onTap: onOpen,
-              ),
-              _StartAction(
-                icon: Icons.photo_library_outlined,
-                title: '사진 정리',
-                subtitle: '폴더에서 베스트 컷 고르기',
-                onTap: onOrganize,
-              ),
-            ]),
-            if (recent.isNotEmpty) ...[
-              const SizedBox(height: 48),
-              Row(children: [
-                const Text('최근 사진', style: TextStyle(color: Color(0xFFA9ABB1), fontSize: 10.5, letterSpacing: 1.4, fontWeight: FontWeight.w700)),
-                const SizedBox(width: 10),
-                const Expanded(child: Divider(color: borderColor, height: 1)),
-              ]),
-              const SizedBox(height: 14),
-              SizedBox(
-                height: 92,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: recent.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) => _RecentTile(path: recent[i], onTap: () => onOpenPath(recent[i])),
-                ),
-              ),
-            ],
-          ]),
+    return Stack(children: [
+      // A soft violet glow behind the mark, like light through a lens.
+      const Positioned.fill(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -0.55),
+              radius: 0.75,
+              colors: [Color(0x266E4BFF), Color(0x00000000)],
+            ),
+          ),
         ),
       ),
-    );
+      Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 680),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const ApertureMark(size: 56),
+              const SizedBox(height: 22),
+              const Text('ACG', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+              const SizedBox(height: 8),
+              const Text('사진을 읽고 색을 맞추는 AI 색보정', style: TextStyle(color: textDim, fontSize: 14)),
+              const SizedBox(height: 40),
+              Wrap(spacing: 14, runSpacing: 14, alignment: WrapAlignment.center, children: [
+                _StartAction(
+                  icon: Icons.tune,
+                  title: '사진 보정',
+                  subtitle: '사진을 열거나 끌어다 놓기',
+                  hint: 'Ctrl+O',
+                  primary: true,
+                  onTap: onOpen,
+                ),
+                _StartAction(
+                  icon: Icons.photo_library_outlined,
+                  title: '사진 정리',
+                  subtitle: '폴더에서 베스트 컷 고르기',
+                  onTap: onOrganize,
+                ),
+              ]),
+              if (recent.isNotEmpty) ...[
+                const SizedBox(height: 52),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('최근 사진', style: TextStyle(color: textDim, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 96,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: recent.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 10),
+                    itemBuilder: (_, i) => _RecentTile(path: recent[i], onTap: () => onOpenPath(recent[i])),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+      ),
+    ]);
   }
 }
 
 class _StartAction extends StatefulWidget {
-  const _StartAction({required this.icon, required this.title, required this.subtitle, required this.onTap, this.primary = false});
+  const _StartAction(
+      {required this.icon, required this.title, required this.subtitle, required this.onTap, this.hint, this.primary = false});
   final IconData icon;
   final String title;
   final String subtitle;
+  final String? hint;
   final VoidCallback onTap;
   final bool primary;
   @override
@@ -655,32 +680,41 @@ class _StartActionState extends State<_StartAction> {
         child: GestureDetector(
           onTap: widget.onTap,
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            width: 300,
+            duration: const Duration(milliseconds: 160),
+            width: 290,
             padding: const EdgeInsets.all(18),
+            transform: Matrix4.translationValues(0, hover ? -2 : 0, 0),
             decoration: BoxDecoration(
-              gradient: plateGradient,
-              border: Border.all(color: hover ? accent : borderColor),
-              borderRadius: BorderRadius.circular(6),
+              color: cardColor,
+              border: Border.all(color: hover ? accent.withValues(alpha: 0.7) : borderColor),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: hover ? const [BoxShadow(color: Color(0x336E4BFF), blurRadius: 24, offset: Offset(0, 8))] : null,
             ),
             child: Row(children: [
               Container(
-                width: 42,
-                height: 42,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
-                  color: widget.primary ? accent : const Color(0xFF26272A),
-                  shape: BoxShape.circle,
+                  gradient: widget.primary ? accentGradient : null,
+                  color: widget.primary ? null : const Color(0xFF24243A),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(widget.icon, size: 20, color: Colors.white),
+                child: Icon(widget.icon, size: 21, color: widget.primary ? Colors.white : accent),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(widget.title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  Text(widget.title, style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
-                  Text(widget.subtitle, style: const TextStyle(color: textDim, fontSize: 12)),
+                  Text(widget.subtitle, style: const TextStyle(color: textDim, fontSize: 12.5)),
                 ]),
               ),
+              if (widget.hint != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(5)),
+                  child: Text(widget.hint!, style: readout.copyWith(fontSize: 10.5, color: textDim)),
+                ),
             ]),
           ),
         ),
@@ -708,11 +742,11 @@ class _RecentTileState extends State<_RecentTile> {
             onTap: widget.onTap,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 120),
-              width: 128,
+              width: 132,
               decoration: BoxDecoration(
                 color: cardColor,
-                border: Border.all(color: hover ? accent : const Color(0x33FFFFFF), width: hover ? 1.5 : 1),
-                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: hover ? accent : borderColor, width: hover ? 1.5 : 1),
+                borderRadius: BorderRadius.circular(10),
               ),
               clipBehavior: Clip.antiAlias,
               child: Image.file(
