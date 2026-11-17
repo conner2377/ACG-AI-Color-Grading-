@@ -1,7 +1,7 @@
 // AI color grading: the model reads the photo (small JPEG), its statistics and the
-// user's request, and answers with a PLAN: which vetted template, how strong, and small
-// bounded adjustments (4 variations). The histogram baseline is computed by the engine,
-// not the model. The engine then applies
+// user's request, analyzes it like a colorist and answers with edit VALUES (slider deltas,
+// HSL, color wheels, curve) for 3 variations; a second pass lets it look at its own result
+// and correct it. The histogram baseline is computed by the engine. The engine then applies
 // them at full resolution, so the photo is never regenerated and never loses quality.
 
 import 'dart:convert';
@@ -74,55 +74,70 @@ class AiException implements Exception {
 }
 
 const _systemPrompt = '''
-You are a senior colorist directing a non-destructive photo editor (like Lightroom presets).
-You NEVER generate, redraw or retouch pixels. You only choose WHICH vetted template to use,
-HOW STRONGLY, and small bounded adjustments. The editor has already applied a physical
-baseline (exposure, white balance, black/white points from the histogram), so do not
-re-correct exposure or white balance unless the user asks for a mood that needs it.
+You are a senior colorist operating a non-destructive photo editor. You NEVER generate,
+redraw or retouch pixels: you only set slider values, curves and color wheels, and the
+editor renders them at full resolution, so the photo keeps its original quality.
 
-Workflow:
-1. Read the photo, its statistics and the user's request (and the reference photo / guide, if given).
-2. Decide the creative direction (mood, palette, contrast, era/film/cinema look).
-3. Return EXACTLY 4 variations, all faithful to the request but distinct:
-   #1 your best match, #2 a stronger/more dramatic take, #3 a softer/subtler take,
-   #4 an alternative interpretation (different template or palette).
+You do NOT pick presets. You analyze THIS photo and decide the edit yourself, the way a
+human retoucher works in Lightroom, in this order:
+1. Light: exposure, contrast, highlights, shadows, whites, blacks (fix what is wrong first:
+   underexposed subject, blown sky, flat haze, crushed shadows).
+2. Color: white balance (temperature, tint), vibrance, saturation, and per-color HSL
+   (e.g. calmer greens, bluer sky, natural skin in orange/red).
+3. Mood: tone curve, color grading wheels (shadows/midtones/highlights), fade, clarity,
+   texture, dehaze, grain, halation, bloom, vignette.
+The editor has already applied a neutral physical baseline from the histogram (exposure,
+white balance, black/white points). The FIRST image is the photo with that baseline.
+Your "adjust" values are DELTAS on top of it.
 
 Reply with ONE JSON object and nothing else:
 {
-  "analysis": "한국어 1~2문장: 사진 특징과 선택한 방향",
+  "analysis": "한국어 2문장: 사진에서 본 것(장면·빛·색·문제점)과 보정 방향",
   "variations": [
     {
       "name": "짧은 한국어 이름",
-      "template": "<exact template name from the catalog, or empty string for none>",
-      "strength": 1.0,
-      "adjust": { "contrast": 0.1, "temperature": -0.1 },
-      "advanced": { },
-      "reference_match": 0.0
+      "reason": "한국어 한 줄: 무엇을 왜 바꿨는지",
+      "adjust": { "exposure": 0.2, "shadows": 0.25, "temperature": 0.08 },
+      "hsl": [ {"hue":0,"sat":0,"lum":0}, ... 8 bands ],
+      "grade_shadows": {"hue": 210, "sat": 0.15},
+      "grade_midtones": {"hue": 0, "sat": 0},
+      "grade_highlights": {"hue": 45, "sat": 0.1},
+      "curve": [[0,0.03],[0.25,0.22],[0.75,0.8],[1,0.98]],
+      "monochrome": false
     }
   ]
 }
 
-Field rules:
-- strength: 0.0-1.5, how much of the template (1 = as designed).
-- adjust (optional): deltas added on top. Allowed keys and limits:
-  exposure ±1; contrast, highlights, shadows, whites, blacks, temperature, tint, vibrance,
-  saturation, clarity, texture, dehaze, fade, grain, vignette, halation, bloom ±0.5.
-- advanced (optional, use sparingly): absolute overrides only when no template can express it:
-  "hsl": 8 bands [red,orange,yellow,green,aqua,blue,purple,magenta] of {"hue":-45..45,"sat":-1..1,"lum":-1..1};
-  "grade_shadows"/"grade_midtones"/"grade_highlights": {"hue":0..360,"sat":0..1};
-  "curve"/"curve_r"/"curve_g"/"curve_b": [[x,y],...] in 0..1; "channel_mixer": 3x3 linear RGB; "monochrome": bool.
-- reference_match: 0.0-1.0, ONLY when a reference photo is given: how much exact color matching to blend in.
+Return EXACTLY 3 variations of the same direction: #1 your best edit, #2 a bolder take,
+#3 a subtler, more natural take. All keys except name/reason/adjust are optional; omit
+what you don't change.
 
-Guidance:
-- The editor automatically FITS the chosen template to this photo (it tones down contrast,
-  warmth or saturation the photo already has, and protects highlights, shadows and skin).
-  So pick the look that matches the intent; don't try to compensate for the photo yourself.
-- Keep "adjust" small (usually within ±0.15) and use it only for what the request asks for
-  that the template lacks. A natural, harmonious result beats a dramatic filter.
-- Prefer templates + strength + small adjust.
-- Skin tones are protected automatically; keep faces natural unless asked otherwise.
-- Don't be timid: if the user asks for a strong mood (film, cinematic, moody, emotional), commit to it.
-- Effects such as infrared, flash, film, cinematic must be built from templates/parameters only.
+Limits:
+- adjust (deltas): exposure ±1.5; contrast, highlights, shadows, whites, blacks, temperature,
+  tint, vibrance, saturation, clarity, texture, dehaze, vignette ±0.8;
+  fade, grain, grain_size, halation, bloom, sharpen, noise_reduction 0..0.8.
+- hsl: 8 bands in order [red, orange, yellow, green, aqua, blue, purple, magenta],
+  hue -45..45 degrees, sat -1..1, lum -1..1. Absolute values.
+- grade_*: hue 0..360, sat 0..1 (0.05-0.25 is already visible). Absolute values.
+- curve: 3-6 points [x,y] in 0..1, gentle; it multiplies with contrast, so don't double up.
+
+Taste:
+- Correct problems first, then style. A harmonious, believable photo beats a filter.
+- Keep skin natural (orange band hue within ±8, sat within ±0.2) unless asked otherwise;
+  the editor also protects skin automatically.
+- Watch the statistics: don't push highlights that are already near clipping, and don't
+  crush shadows that are already dark.
+- If the user asks for a mood (film, cinematic, infrared, flash, warm, moody), commit to it
+  with these tools; when they ask for nothing specific, make the photo look its best.
+''';
+
+const _refinePrompt = '''
+Look again. The FIRST image is the photo before your edit (baseline), the SECOND is the
+result of your edit. Compare them against the request and fix what is still off (too strong,
+too weak, color cast, clipped highlights, muddy shadows, unnatural skin). Return the same JSON
+format with EXACTLY 1 variation whose "adjust" values are DELTAS on top of the SECOND image,
+and absolute hsl/grade/curve values only if you change them. If it already looks right, return
+small or empty adjust. Put what you changed in "reason".
 ''';
 
 /// Very small HTML-to-text for guide links.
@@ -159,51 +174,66 @@ class AiService {
   AiService(this.settings);
   final AiSettings settings;
 
-  /// Ask the model for a grading plan: 4 variations, each a template + strength +
-  /// bounded adjustments. The caller turns them into recipes on top of the baseline.
+  /// Ask the model to analyze the photo and decide the edit itself: 3 variations of
+  /// slider deltas + optional HSL / grading / curve values.
   Future<AiPlan> plan({
     required Map<String, dynamic> current,
     required String imageB64,
     required Map<String, dynamic> stats,
-    required List<Map<String, dynamic>> templates,
     String request = '',
     String? guideText,
     String? referenceImageB64,
   }) async {
-    if (settings.apiKey.trim().isEmpty) {
-      throw AiException('${settings.provider.label} API 키를 설정에서 입력해 주세요.');
-    }
+    _checkKey();
     final currentForPrompt = cloneRecipe(current)..remove('lut');
-    final buf = StringBuffer()..writeln('Template catalog (name | category | look):');
-    for (final t in templates) {
-      buf.writeln('- ${t['name']} | ${t['category'] ?? ''} | ${t['description'] ?? ''}');
-    }
-    buf
-      ..writeln()
+    final buf = StringBuffer()
       ..writeln('Photo statistics (original): ${jsonEncode(stats)}')
-      ..writeln('Baseline correction already applied (do not repeat it): ${jsonEncode(currentForPrompt)}');
+      ..writeln('Baseline already applied (your adjust values add to these): ${jsonEncode(currentForPrompt)}');
     if (guideText != null && guideText.isNotEmpty) {
       buf
-        ..writeln('A color-grading guide the user wants applied (translate its steps into template/adjust/advanced):')
+        ..writeln('A color-grading guide the user wants applied (translate its steps into these controls):')
         ..writeln('<guide>')
         ..writeln(guideText)
         ..writeln('</guide>');
     }
     if (referenceImageB64 != null) {
       buf.writeln('The SECOND image is a reference photo whose color style the user wants. '
-          'Pick templates/adjustments that reproduce its palette, contrast and mood, and set reference_match '
-          '(0.3-0.8 typical) so the engine also blends an exact color match.');
+          'Reproduce its palette, contrast and mood with the controls, and set "reference_match" '
+          '(0.2-0.6) on each variation so the engine also blends an exact color match.');
     }
-    buf.writeln('User request: ${request.isEmpty ? '이 사진에 가장 잘 어울리는 전문가 수준의 감성 보정' : request}');
-    final images = [imageB64, ?referenceImageB64];
-
-    final text = switch (settings.provider) {
-      AiProvider.gemini => await _gemini(buf.toString(), images),
-      AiProvider.claude => await _claude(buf.toString(), images),
-      AiProvider.openai => await _openai(buf.toString(), images),
-    };
-    return AiPlan.fromJson(_extractJson(text), templates.map((t) => t['name'] as String).toSet());
+    buf.writeln(request.trim().isEmpty
+        ? 'User request: (none) 사진을 분석해서 가장 좋아 보이도록 전문가처럼 보정해 주세요.'
+        : 'User request: $request');
+    final text = await _ask(_systemPrompt, buf.toString(), [imageB64, ?referenceImageB64]);
+    return AiPlan.fromJson(_extractJson(text));
   }
+
+  /// Second pass (RetouchLLM-style feedback loop): the model sees before/after and corrects.
+  Future<AiPlan> refine({
+    required String beforeB64,
+    required String afterB64,
+    required Map<String, dynamic> currentRecipe,
+    String request = '',
+  }) async {
+    _checkKey();
+    final r = cloneRecipe(currentRecipe)..remove('lut');
+    final prompt = 'Current edit values: ${jsonEncode(r)}\n'
+        'User request: ${request.trim().isEmpty ? '(none) 가장 좋아 보이게' : request}';
+    final text = await _ask('$_systemPrompt\n$_refinePrompt', prompt, [beforeB64, afterB64]);
+    return AiPlan.fromJson(_extractJson(text), max: 1);
+  }
+
+  void _checkKey() {
+    if (settings.apiKey.trim().isEmpty) {
+      throw AiException('${settings.provider.label} API 키를 설정에서 입력해 주세요.');
+    }
+  }
+
+  Future<String> _ask(String system, String prompt, List<String> images) => switch (settings.provider) {
+        AiProvider.gemini => _gemini(system, prompt, images),
+        AiProvider.claude => _claude(system, prompt, images),
+        AiProvider.openai => _openai(system, prompt, images),
+      };
 
   Map<String, dynamic> _extractJson(String text) {
     final start = text.indexOf('{');
@@ -226,13 +256,13 @@ class AiService {
     throw AiException('${settings.provider.label} 오류 (${r.statusCode}): $msg');
   }
 
-  Future<String> _gemini(String prompt, List<String> images) async {
+  Future<String> _gemini(String system, String prompt, List<String> images) async {
     final uri = Uri.parse(
         'https://generativelanguage.googleapis.com/v1beta/models/${settings.model}:generateContent');
     final body = {
       'systemInstruction': {
         'parts': [
-          {'text': _systemPrompt}
+          {'text': system}
         ]
       },
       'contents': [
@@ -256,13 +286,13 @@ class AiService {
     return parts.map((p) => p['text'] ?? '').join();
   }
 
-  Future<String> _claude(String prompt, List<String> images) async {
+  Future<String> _claude(String system, String prompt, List<String> images) async {
     final body = {
       'model': settings.model,
       'max_tokens': 16000,
       'output_config': {'effort': 'low'},
       'fallbacks': 'default',
-      'system': _systemPrompt,
+      'system': system,
       'messages': [
         {
           'role': 'user',
@@ -293,12 +323,12 @@ class AiService {
     return (j['content'] as List).where((b) => b['type'] == 'text').map((b) => b['text']).join();
   }
 
-  Future<String> _openai(String prompt, List<String> images) async {
+  Future<String> _openai(String system, String prompt, List<String> images) async {
     final body = {
       'model': settings.model,
       'response_format': {'type': 'json_object'},
       'messages': [
-        {'role': 'system', 'content': _systemPrompt},
+        {'role': 'system', 'content': system},
         {
           'role': 'user',
           'content': [
@@ -323,46 +353,42 @@ class AiService {
   }
 }
 
-/// Bounded deltas the AI may add on top of a template.
-const aiAdjustRanges = <String, double>{
-  'exposure': 1.0, 'contrast': 0.5, 'highlights': 0.5, 'shadows': 0.5, 'whites': 0.5, 'blacks': 0.5,
-  'temperature': 0.5, 'tint': 0.5, 'vibrance': 0.5, 'saturation': 0.5, 'clarity': 0.5, 'texture': 0.5,
-  'dehaze': 0.5, 'fade': 0.5, 'grain': 0.5, 'vignette': 0.5, 'halation': 0.5, 'bloom': 0.5,
+/// Bounded deltas the AI may add on top of the baseline.
+final aiAdjustRanges = <String, (double, double)>{
+  'exposure': (-1.5, 1.5),
+  for (final k in ['contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance',
+      'saturation', 'clarity', 'texture', 'dehaze', 'vignette'])
+    k: (-0.8, 0.8),
+  for (final k in ['fade', 'grain', 'grain_size', 'halation', 'bloom', 'sharpen', 'noise_reduction']) k: (-0.8, 0.8),
 };
+
+const _absoluteKeys = ['hsl', 'grade_shadows', 'grade_midtones', 'grade_highlights', 'curve', 'curve_r', 'curve_g', 'curve_b', 'monochrome'];
 
 class AiVariation {
   AiVariation({
     required this.name,
-    this.template,
-    this.strength = 1.0,
+    this.reason = '',
     this.adjust = const {},
-    this.advanced = const {},
+    this.absolute = const {},
     this.referenceMatch = 0,
   });
   final String name;
-  final String? template;
-  final double strength;
+  final String reason;
   final Map<String, double> adjust;
-  final Map<String, dynamic> advanced;
+  final Map<String, dynamic> absolute;
   final double referenceMatch;
 
-  /// Build the recipe: baseline → template at strength → bounded deltas → advanced overrides.
-  /// [lookRecipe] is the full recipe of base + look (already fitted to the photo).
-  Map<String, dynamic> toRecipe(Map<String, dynamic> base, Map<String, dynamic>? lookRecipe) {
+  /// base + deltas (clamped to the recipe ranges) + absolute HSL / grading / curve values.
+  Map<String, dynamic> toRecipe(Map<String, dynamic> base) {
     var r = cloneRecipe(base);
-    if (lookRecipe != null) r = blendRecipe(base, lookRecipe, strength);
     for (final e in adjust.entries) {
       final range = recipeRanges[e.key]!;
-      final lo = e.key == 'exposure' ? -5.0 : range.$1, hi = e.key == 'exposure' ? 5.0 : range.$2;
-      r[e.key] = (getVal(r, e.key) + e.value).clamp(lo, hi);
+      r[e.key] = (getVal(r, e.key) + e.value).clamp(range.$1, range.$2);
     }
-    if (advanced.isNotEmpty) r = mergeAiRecipe(r, advanced);
+    if (absolute.isNotEmpty) r = mergeAiRecipe(r, absolute);
     r['name'] = name;
     r['category'] = 'AI';
-    r['description'] = [
-      if (template != null) '$template ${(strength * 100).round()}%',
-      if (referenceMatch > 0) '참조 매칭 ${(referenceMatch * 100).round()}%',
-    ].join(' · ');
+    r['description'] = reason;
     return r;
   }
 }
@@ -372,28 +398,30 @@ class AiPlan {
   final String analysis;
   final List<AiVariation> variations;
 
-  factory AiPlan.fromJson(Map<String, dynamic> j, Set<String> templateNames) {
+  factory AiPlan.fromJson(Map<String, dynamic> j, {int max = 4}) {
     double n(dynamic v, double d) => v is num ? v.toDouble() : d;
     final vars = <AiVariation>[];
     final list = j['variations'] is List ? j['variations'] as List : [j];
     for (final v in list.whereType<Map>()) {
-      final t = v['template'] is String && templateNames.contains(v['template']) ? v['template'] as String : null;
       final adjust = <String, double>{};
       if (v['adjust'] is Map) {
         (v['adjust'] as Map).forEach((k, val) {
           final lim = aiAdjustRanges[k];
-          if (lim != null && val is num) adjust[k as String] = val.toDouble().clamp(-lim, lim);
+          if (lim != null && val is num) adjust[k as String] = val.toDouble().clamp(lim.$1, lim.$2);
         });
       }
+      final absolute = <String, dynamic>{
+        for (final k in _absoluteKeys)
+          if (v[k] != null) k: v[k],
+      };
       vars.add(AiVariation(
         name: v['name'] is String && (v['name'] as String).isNotEmpty ? v['name'] as String : 'AI 보정 ${vars.length + 1}',
-        template: t,
-        strength: n(v['strength'], 1.0).clamp(0.0, 1.5),
+        reason: v['reason'] is String ? v['reason'] as String : '',
         adjust: adjust,
-        advanced: v['advanced'] is Map ? (v['advanced'] as Map).cast<String, dynamic>() : const {},
+        absolute: absolute,
         referenceMatch: n(v['reference_match'], 0).clamp(0.0, 1.0),
       ));
-      if (vars.length == 6) break;
+      if (vars.length == max) break;
     }
     if (vars.isEmpty) throw AiException('AI가 보정안을 만들지 못했습니다. 다시 시도해 주세요.');
     return AiPlan(j['analysis'] is String ? j['analysis'] as String : '', vars);

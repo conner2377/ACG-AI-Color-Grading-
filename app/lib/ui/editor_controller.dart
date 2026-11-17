@@ -518,9 +518,12 @@ class EditorController extends ChangeNotifier {
     }
   }
 
-  /// Run the AI plan: baseline first (engine), then the model picks templates, strength
-  /// and bounded tweaks; each variation becomes a recipe, optionally blended with an
-  /// exact color match to the reference photo.
+  /// The last AI request, so "한 번 더 다듬기" can refer to it.
+  String aiRequest = '';
+
+  /// Run the AI: the engine computes the physical baseline, then the model analyzes the
+  /// photo and decides the edit values itself (3 variations). With a reference photo the
+  /// engine also blends an exact color match.
   Future<void> runAi({
     required AiSettings settings,
     String request = '',
@@ -531,35 +534,58 @@ class EditorController extends ChangeNotifier {
     if (s == null) return;
     if (autoBase == null) await runAuto();
     final base = withGeometryOf(autoBase ?? emptyRecipe(), recipe);
-    final templates = enginePresets();
     final refB64 = referencePath == null ? null : await EngineSession.thumbnailOf(referencePath);
-    final img = await s.aiThumbnail(base, size: 512);
+    final img = await s.aiThumbnail(base, size: 640);
     final plan = await AiService(settings).plan(
       current: base,
       imageB64: img,
       stats: stats ?? await s.analyze(),
-      templates: templates,
       request: request,
       guideText: guideText,
       referenceImageB64: refB64,
     );
-    final byName = {for (final t in templates) t['name'] as String: t};
     final recipes = <Map<String, dynamic>>[];
     for (final v in plan.variations) {
-      Map<String, dynamic>? look;
-      final t = v.template == null ? null : byName[v.template];
-      if (t != null) look = (await s.adaptLook(base, t))['recipe'] as Map<String, dynamic>;
-      var r = v.toRecipe(base, look);
+      var r = v.toRecipe(base);
       if (referencePath != null && v.referenceMatch > 0) {
         final matched = await s.matchReference(r, referencePath, v.referenceMatch);
-        matched['name'] = r['name'];
-        matched['category'] = r['category'];
-        matched['description'] = r['description'];
+        for (final k in ['name', 'category', 'description']) {
+          matched[k] = r[k];
+        }
         r = matched;
       }
       recipes.add(r);
     }
-    aiAnalysis = plan.analysis;
+    aiRequest = request;
+    await _showAi(plan.analysis, recipes, base);
+  }
+
+  /// Feedback pass: the model compares the baseline with the current AI result and fixes
+  /// what is still off. The refined edit is added as a new card and applied.
+  Future<void> refineAi(AiSettings settings) async {
+    final s = session;
+    if (s == null) return;
+    final base = withGeometryOf(autoBase ?? emptyRecipe(), recipe);
+    final current = cloneRecipe(recipe);
+    final before = await s.aiThumbnail(base, size: 640);
+    final after = await s.aiThumbnail(current, size: 640);
+    final plan = await AiService(settings).refine(
+      beforeB64: before,
+      afterB64: after,
+      currentRecipe: current,
+      request: aiRequest,
+    );
+    final v = plan.variations.first;
+    final r = v.toRecipe(current);
+    r['name'] = '${current['name'] ?? 'AI 보정'} · 다듬음';
+    final thumbs = await _thumbs([r]);
+    aiThumbs = [...thumbs, ...aiThumbs.where((t) => t.name != r['name'])];
+    if (plan.analysis.isNotEmpty) aiAnalysis = plan.analysis;
+    pickAiVariation(r);
+  }
+
+  Future<void> _showAi(String analysis, List<Map<String, dynamic>> recipes, Map<String, dynamic> base) async {
+    aiAnalysis = analysis;
     aiThumbs = await _thumbs(recipes);
     if (recipes.isNotEmpty) {
       _blendFrom = base;

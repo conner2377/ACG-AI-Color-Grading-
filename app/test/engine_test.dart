@@ -39,15 +39,14 @@ void main() {
     final plan = AiPlan.fromJson({
       'analysis': '테스트',
       'variations': [
-        {'name': 'A', 'template': '필름', 'strength': 9, 'adjust': {'contrast': 3, 'bogus': 1}},
-        {'name': 'B', 'template': '없는 템플릿', 'adjust': {'exposure': -0.3}},
+        {'name': 'A', 'reason': '이유', 'adjust': {'contrast': 3, 'bogus': 1}, 'grade_shadows': {'hue': 200, 'sat': 0.2}},
+        {'name': 'B', 'adjust': {'exposure': -0.3}},
       ],
-    }, {'필름'});
+    });
     expect(plan.variations.length, 2);
-    expect(plan.variations[0].strength, 1.5);
-    expect(plan.variations[0].adjust, {'contrast': 0.5});
-    expect(plan.variations[1].template, isNull);
-    final r = plan.variations[1].toRecipe({'exposure': 0.4}, null);
+    expect(plan.variations[0].adjust, {'contrast': 0.8});
+    expect(getNum(plan.variations[0].toRecipe(emptyRecipe()), 'grade_shadows.sat'), closeTo(0.2, 1e-9));
+    final r = plan.variations[1].toRecipe({'exposure': 0.4});
     expect(getVal(r, 'exposure'), closeTo(0.1, 1e-9));
     expect(r['name'], 'B');
   });

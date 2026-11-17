@@ -309,7 +309,7 @@ class _AiPanelState extends State<AiPanel> {
   AiSettings? _settings;
   String? _referencePath;
 
-  static const quick = ['필름 카메라 느낌', '영화처럼', '따뜻하고 포근하게', '차갑고 무디하게', '깊고 진하게', '밝고 화사하게', '적외선 촬영처럼', '플래시 터진 것처럼'];
+  static const quick = ['필름 카메라 느낌', '영화처럼', '따뜻하고 포근하게', '차갑고 무디하게', '깊고 진하게', '밝고 화사하게', '적외선 촬영처럼', '플래시 터진 것처럼', '하늘을 더 파랗게', '인물 피부 화사하게'];
 
   EditorController get c => widget.c;
 
@@ -342,7 +342,8 @@ class _AiPanelState extends State<AiPanel> {
       if ((_settings?.apiKey ?? '').isEmpty) return;
     }
     final text = request ?? _request.text;
-    await c.withBusy('${_settings!.provider.label}가 어울리는 룩을 고르는 중…', () async {
+    final label = text.trim().isEmpty && guideUrl == null ? '사진을 분석해서 보정하는 중…' : '요청을 읽고 보정하는 중…';
+    await c.withBusy('${_settings!.provider.label} · $label', () async {
       String? guide;
       if (guideUrl != null && guideUrl.trim().isNotEmpty) guide = await fetchGuideText(guideUrl);
       await c.runAi(
@@ -352,6 +353,17 @@ class _AiPanelState extends State<AiPanel> {
         referencePath: _referencePath,
       );
     });
+  }
+
+  Future<bool> _ensureKey() async {
+    if (_settings == null) return false;
+    if (_settings!.apiKey.isEmpty) await _openSettings();
+    return (_settings?.apiKey ?? '').isNotEmpty;
+  }
+
+  Future<void> _refine() async {
+    if (!await _ensureKey()) return;
+    await c.withBusy('${_settings!.provider.label} · 결과를 다시 보고 다듬는 중…', () => c.refineAi(_settings!));
   }
 
   Future<void> _pickReference() async {
@@ -391,7 +403,32 @@ class _AiPanelState extends State<AiPanel> {
     return Column(children: [
       Expanded(
         child: ListView(padding: const EdgeInsets.only(bottom: 16), children: [
-          const PanelLabel('요청'),
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 14, 12, 4),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: accentDim,
+              border: Border.all(color: accent.withValues(alpha: 0.35)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const Row(children: [
+                Icon(Icons.auto_awesome, size: 16, color: accent),
+                SizedBox(width: 8),
+                Text('AI 분석 보정', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              ]),
+              const SizedBox(height: 6),
+              const Text('AI가 사진의 장면·빛·색을 읽고 노출부터 색, 분위기까지 값을 직접 정해요. 프리셋은 쓰지 않아요.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.5)),
+              const SizedBox(height: 12),
+              GradientButton(
+                label: '사진 분석해서 보정',
+                icon: Icons.auto_fix_high,
+                onPressed: busy ? null : () => _runAi(request: ''),
+              ),
+            ]),
+          ),
+          const PanelLabel('말로 부탁하기'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: TextField(
@@ -399,8 +436,9 @@ class _AiPanelState extends State<AiPanel> {
               minLines: 2,
               maxLines: 4,
               style: const TextStyle(fontSize: 13),
+              onSubmitted: busy ? null : (_) => _runAi(),
               decoration: const InputDecoration(
-                hintText: '예) 필름 카메라로 찍은 듯 따뜻하게, 하늘은 조금 더 파랗게',
+                hintText: '예) 해 질 녘처럼 따뜻하게, 하늘은 더 깊게, 얼굴은 자연스럽게',
                 border: OutlineInputBorder(),
                 isDense: true,
               ),
@@ -422,31 +460,34 @@ class _AiPanelState extends State<AiPanel> {
                 ),
             ]),
           ),
-          const PanelLabel('예시 사진 (선택)'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: _referencePath == null
-                ? OutlinedButton.icon(
-                    onPressed: busy ? null : _pickReference,
-                    icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-                    label: const Text('이 사진 같은 색감으로 (예시 첨부)'),
-                  )
-                : InputChip(
-                    avatar: const Icon(Icons.image_outlined, size: 16),
-                    label: Text(_referencePath!.split(RegExp(r'[\\/]')).last, style: const TextStyle(fontSize: 12)),
-                    onDeleted: () => setState(() => _referencePath = null),
-                  ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-            child: GradientButton(
-              label: 'AI에게 룩 추천받기',
-              icon: Icons.auto_awesome,
-              onPressed: busy ? null : () => _runAi(),
-            ),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Row(children: [
+              Expanded(
+                child: _referencePath == null
+                    ? TextButton.icon(
+                        style: TextButton.styleFrom(alignment: Alignment.centerLeft, foregroundColor: textDim),
+                        onPressed: busy ? null : _pickReference,
+                        icon: const Icon(Icons.add_photo_alternate_outlined, size: 17),
+                        label: const Text('예시 사진 첨부', style: TextStyle(fontSize: 12)),
+                      )
+                    : InputChip(
+                        avatar: const Icon(Icons.image_outlined, size: 16),
+                        label: Text(_referencePath!.split(RegExp(r'[\\/]')).last,
+                            overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                        onDeleted: () => setState(() => _referencePath = null),
+                      ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                onPressed: busy ? null : () => _runAi(),
+                style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6))),
+                child: const Text('요청대로 보정'),
+              ),
+            ]),
           ),
           if (c.aiThumbs.isNotEmpty) ...[
-            PanelLabel('AI 추천',
+            PanelLabel('AI 보정 결과',
                 trailing: GestureDetector(
                   onTap: () {
                     c.aiThumbs = [];
@@ -470,6 +511,19 @@ class _AiPanelState extends State<AiPanel> {
                   onTap: () => c.pickAiVariation(t.recipe),
                 ),
             ], columns: 2),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: OutlinedButton.icon(
+                onPressed: busy ? null : _refine,
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('결과를 다시 보고 한 번 더 다듬기'),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text('AI가 정한 값은 빛·색·커브·그레이딩 탭의 슬라이더에 그대로 들어가 있어서 이어서 손볼 수 있어요.',
+                  style: TextStyle(color: textDim, fontSize: 11.5, height: 1.5)),
+            ),
           ],
           const PanelLabel('기타'),
           ListTile(
@@ -494,7 +548,7 @@ class _AiPanelState extends State<AiPanel> {
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Text(
-              'AI는 사진을 새로 그리지 않아요. 룩 목록에서 어울리는 것을 고르고 아주 작은 조정만 더하며, 사진에 맞추는 일은 앱이 직접 해요. AI 없이도 룩 탭에서 같은 자동 맞춤을 쓸 수 있어요.',
+              'AI는 사진을 새로 그리지 않아요. 슬라이더·커브·색 휠 값만 정하고, 앱이 원본 해상도로 적용해서 화질이 그대로예요.',
               style: TextStyle(color: textDim, fontSize: 11.5, height: 1.5),
             ),
           ),
