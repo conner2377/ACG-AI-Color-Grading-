@@ -1,4 +1,4 @@
-# ACG 윈도우 배포 빌드
+﻿# ACG 윈도우 배포 빌드
 #  - Rust 엔진 테스트 → Flutter 릴리스 빌드 → dist\ACG 폴더와 zip 생성 → 바탕화면 바로가기
 # 사용: 이 파일을 우클릭 → "PowerShell에서 실행", 또는 build_windows.bat 더블클릭
 
