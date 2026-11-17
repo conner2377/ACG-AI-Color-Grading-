@@ -321,3 +321,31 @@ mod tests {
         }
     }
 }
+
+/// Photo organizer: measure photos. `paths_json` is a JSON array of paths; `cache_dir`
+/// (may be null) receives JPEG previews for TIFFs. Returns {"metrics":[...],"errors":[...]}.
+/// # Safety
+/// Strings must be valid C strings or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn acg_cull_measure(paths_json: *const c_char, cache_dir: *const c_char) -> *mut c_char {
+    let paths: Vec<String> = match in_str(paths_json).map(serde_json::from_str) {
+        Some(Ok(p)) => p,
+        _ => { set_error("paths: invalid JSON"); return std::ptr::null_mut() }
+    };
+    let (metrics, errors) = crate::cull::measure_all(&paths, in_str(cache_dir));
+    out_string(serde_json::json!({ "metrics": metrics, "errors": errors }).to_string())
+}
+
+/// Photo organizer: group measured photos into bursts and pick the best frames.
+/// Returns a JSON array of groups.
+/// # Safety
+/// `metrics_json` must be a valid C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn acg_cull_group(metrics_json: *const c_char) -> *mut c_char {
+    let ms: Vec<crate::cull::Metrics> = match in_str(metrics_json).map(serde_json::from_str) {
+        Some(Ok(m)) => m,
+        Some(Err(e)) => { set_error(format!("metrics: {e}")); return std::ptr::null_mut() }
+        None => { set_error("metrics: null"); return std::ptr::null_mut() }
+    };
+    out_string(serde_json::to_string(&crate::cull::group(ms)).unwrap_or_default())
+}

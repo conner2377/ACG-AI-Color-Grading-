@@ -13,6 +13,7 @@ import 'adjust_tab.dart';
 import 'crop.dart';
 import 'editor_controller.dart';
 import 'looks_tab.dart';
+import 'organizer_page.dart';
 import 'widgets.dart';
 
 const _photoTypes = XTypeGroup(label: '사진', extensions: ['jpg', 'jpeg', 'png', 'tif', 'tiff']);
@@ -33,7 +34,7 @@ typedef _Tool = (String, IconData, String, String);
 const _tools = <_Tool>[
   ('자동', Icons.auto_fix_high, '자동 보정', '사진을 분석해 기본 보정과 어울리는 룩을 골라요'),
   ('룩', Icons.filter_vintage_outlined, '룩', 'LUT처럼 확실한 색감, 사진에 맞춰 세기를 자동 조절'),
-  ('AI', Icons.auto_awesome_outlined, 'AI 추천', '말로 요청하면 AI가 룩과 값을 골라요 (픽셀은 건드리지 않아요)'),
+  ('AI', Icons.auto_awesome_outlined, 'AI 보정', 'AI가 사진을 분석해 직접 보정해요 · 말로 부탁해도 돼요'),
   ('자르기', Icons.crop_rotate, '자르기 · 회전', '비율, 수평, 90° 회전, 반전'),
   ('빛', Icons.wb_sunny_outlined, '빛', '노출 · 대비 · 톤'),
   ('색', Icons.palette_outlined, '색', '화이트 밸런스 · 채도 · 색상 혼합'),
@@ -96,6 +97,11 @@ class _EditorPageState extends State<EditorPage> {
   Future<void> _open() async {
     final f = await openFile(acceptedTypeGroups: [_photoTypes]);
     if (f != null) await _openPath(f.path);
+  }
+
+  Future<void> _organize() async {
+    final path = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => const OrganizerPage()));
+    if (path != null) await _openPath(path);
   }
 
   void _toggleCompare() {
@@ -311,6 +317,7 @@ class _EditorPageState extends State<EditorPage> {
         ),
         SizedBox(width: wide ? 8 : 0),
         _iconBtn('사진 열기 (Ctrl+O)', Icons.folder_open_outlined, _open),
+        if (wide || !has) _iconBtn('폴더 사진 정리', Icons.photo_library_outlined, _organize),
         if (has && wide)
           Flexible(
             child: Padding(
@@ -351,7 +358,7 @@ class _EditorPageState extends State<EditorPage> {
 
     final Widget body;
     if (!has) {
-      body = StartScreen(c: c, onOpen: _open, onOpenPath: _openPath);
+      body = StartScreen(c: c, onOpen: _open, onOpenPath: _openPath, onOrganize: _organize);
     } else if (wide) {
       body = Row(children: [
         Expanded(child: _viewerArea()),
@@ -466,171 +473,167 @@ class AcgLogo extends StatelessWidget {
 
 // ------------------------------------------------------------------ start screen
 
+/// First screen: a full-bleed photo (the last one you edited) with one line about light
+/// and color, the two entry points (edit a photo, organize a folder) and recent photos.
 class StartScreen extends StatefulWidget {
-  const StartScreen({super.key, required this.c, required this.onOpen, required this.onOpenPath});
+  const StartScreen({super.key, required this.c, required this.onOpen, required this.onOpenPath, required this.onOrganize});
   final EditorController c;
   final VoidCallback onOpen;
   final ValueChanged<String> onOpenPath;
+  final VoidCallback onOrganize;
   @override
   State<StartScreen> createState() => _StartScreenState();
 }
 
 class _StartScreenState extends State<StartScreen> {
-  bool hoverDrop = false;
-
-  static const features = [
-    (Icons.auto_fix_high, '자동 분석', '히스토그램으로 노출·화이트밸런스를 먼저 바로잡아요'),
-    (Icons.filter_vintage_outlined, '사진에 맞춰지는 룩', 'LUT처럼 확실한 색감을, 사진마다 세기를 맞춰 얹어요'),
-    (Icons.auto_awesome_outlined, 'AI는 값만 조절', '픽셀을 새로 그리지 않아 화질이 그대로예요'),
-    (Icons.high_quality_outlined, '16비트 무손실', '원본 해상도 그대로 JPEG · TIFF · PNG 저장'),
-  ];
-
   @override
   Widget build(BuildContext context) {
     final recent = widget.c.recent;
+    final cover = recent.isEmpty ? null : recent.first;
     return LayoutBuilder(builder: (context, box) {
-      final wide = box.maxWidth >= 980;
-      final hero = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        const AcgLogo(size: 22),
-        const SizedBox(height: 28),
-        const Text('사진에 어울리는 색을\n자동으로 찾아 드려요',
-            style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700, height: 1.3, letterSpacing: -0.5)),
-        const SizedBox(height: 12),
-        const Text('사진을 열면 장면을 분석하고, 룩을 그 사진에 맞게 조절해서 보여 줘요.',
-            style: TextStyle(color: textDim, fontSize: 14, height: 1.5)),
-        const SizedBox(height: 28),
-        _dropZone(),
-        const SizedBox(height: 28),
-        for (final (icon, title, sub) in features)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Icon(icon, size: 18, color: accent),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 2),
-                  Text(sub, style: const TextStyle(color: textDim, fontSize: 12)),
-                ]),
-              ),
-            ]),
-          ),
-      ]);
-
-      final side = Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-        const _SectionTitle('최근 사진'),
-        if (recent.isEmpty)
-          Container(
-            height: 160,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(8)),
-            child: const Text('아직 연 사진이 없어요', style: TextStyle(color: textDim, fontSize: 12.5)),
+      final wide = box.maxWidth >= 900;
+      final pad = wide ? 72.0 : 24.0;
+      return Stack(fit: StackFit.expand, children: [
+        // Backdrop: the last photo, or a warm darkroom gradient.
+        if (cover != null)
+          Image.file(
+            File(cover),
+            fit: BoxFit.cover,
+            cacheWidth: 1600,
+            filterQuality: FilterQuality.medium,
+            errorBuilder: (_, _, _) => const _DarkroomGradient(),
           )
         else
-          GridView.count(
-            crossAxisCount: wide ? 4 : 3,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            childAspectRatio: 0.82,
-            children: [for (final r in recent) _RecentTile(path: r, onTap: () => widget.onOpenPath(r))],
+          const _DarkroomGradient(),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [Color(0xF2101012), Color(0xCC101012), Color(0x55101012)],
+              stops: [0, 0.45, 1],
+            ),
           ),
-        const SizedBox(height: 28),
-        const _SectionTitle('곧 추가될 기능'),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: surfaceColor, border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(8)),
-          child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Icon(Icons.photo_library_outlined, color: accent, size: 22),
-            SizedBox(width: 14),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Text('사진 정리', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                  SizedBox(width: 8),
-                  _Badge('준비 중'),
-                ]),
-                SizedBox(height: 6),
-                Text('폴더를 넣으면 비슷한 연사 중 가장 선명한 컷을 골라 주고, 크게 넘겨 보며 남길 사진만 새 폴더로 정리해요.',
-                    style: TextStyle(color: textDim, fontSize: 12, height: 1.5)),
+        ),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0x00101012), Color(0x00101012), Color(0xF0101012)],
+              stops: [0, 0.55, 1],
+            ),
+          ),
+        ),
+        SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: box.maxHeight),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(pad, wide ? 64 : 32, pad, 28),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('ACG  ·  AI COLOR GRADING',
+                        style: TextStyle(color: accent, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 2.4)),
+                    const SizedBox(height: 22),
+                    Text('셔터는 순간을 담고,\n색은 그날의 공기를 기억해요.',
+                        style: TextStyle(
+                            fontSize: wide ? 38 : 28, fontWeight: FontWeight.w300, height: 1.35, letterSpacing: -0.6, color: Colors.white)),
+                    const SizedBox(height: 18),
+                    const Text('AI가 사진의 빛과 장면을 읽고 색을 맞춰요. 원하는 느낌을 말로 부탁해도 돼요.\n픽셀은 다시 그리지 않으니 원본 화질 그대로예요.',
+                        style: TextStyle(color: Color(0xFFB9BBC2), fontSize: 14, height: 1.65)),
+                    const SizedBox(height: 30),
+                    Wrap(spacing: 10, runSpacing: 10, children: [
+                      FilledButton.icon(
+                        onPressed: widget.onOpen,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: accent,
+                          foregroundColor: onAccent,
+                          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                        icon: const Icon(Icons.add_photo_alternate_outlined, size: 19),
+                        label: const Text('사진 열기', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: widget.onOrganize,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Color(0x66FFFFFF)),
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                        icon: const Icon(Icons.photo_library_outlined, size: 19),
+                        label: const Text('폴더 사진 정리', style: TextStyle(fontSize: 14)),
+                      ),
+                    ]),
+                    const SizedBox(height: 12),
+                    const Text('사진을 창에 끌어다 놓아도 열려요 · Ctrl+O', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+                    const SizedBox(height: 34),
+                    const Wrap(spacing: 8, runSpacing: 8, children: [
+                      _Pill(Icons.auto_awesome, 'AI 분석 보정'),
+                      _Pill(Icons.chat_bubble_outline, '말로 부탁하는 보정'),
+                      _Pill(Icons.burst_mode_outlined, '연사 중 베스트 컷 고르기'),
+                      _Pill(Icons.high_quality_outlined, '16비트 원본 화질'),
+                    ]),
+                  ]),
+                ),
+                if (recent.isNotEmpty) ...[
+                  const SizedBox(height: 40),
+                  const Text('최근 사진', style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    height: 96,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: recent.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 8),
+                      itemBuilder: (_, i) => _RecentTile(path: recent[i], onTap: () => widget.onOpenPath(recent[i])),
+                    ),
+                  ),
+                ],
               ]),
             ),
-          ]),
+          ),
         ),
       ]);
-
-      final content = wide
-          ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 420, child: hero),
-              const SizedBox(width: 64),
-              Expanded(child: side),
-            ])
-          : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [hero, const SizedBox(height: 32), side]);
-
-      return SingleChildScrollView(
-        padding: EdgeInsets.symmetric(horizontal: wide ? 64 : 24, vertical: wide ? 56 : 28),
-        child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1180), child: content)),
-      );
     });
   }
+}
 
-  Widget _dropZone() => MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => hoverDrop = true),
-        onExit: (_) => setState(() => hoverDrop = false),
-        child: GestureDetector(
-          onTap: widget.onOpen,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            padding: const EdgeInsets.symmetric(vertical: 26, horizontal: 20),
-            decoration: BoxDecoration(
-              color: hoverDrop ? const Color(0xFF1C1D21) : surfaceColor,
-              border: Border.all(color: hoverDrop ? accent : borderColor),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(color: accentDim, borderRadius: BorderRadius.circular(8)),
-                child: const Icon(Icons.add_photo_alternate_outlined, color: accent),
-              ),
-              const SizedBox(width: 16),
-              const Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('사진 열기', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 3),
-                  Text('클릭하거나 사진을 끌어다 놓으세요 · Ctrl+O', style: TextStyle(color: textDim, fontSize: 12)),
-                ]),
-              ),
-              const Text('JPEG · PNG · TIFF', style: TextStyle(color: textDim, fontSize: 11)),
-            ]),
+class _DarkroomGradient extends StatelessWidget {
+  const _DarkroomGradient();
+  @override
+  Widget build(BuildContext context) => const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(0.7, -0.3),
+            radius: 1.2,
+            colors: [Color(0xFF4A3420), Color(0xFF1E1914), Color(0xFF101012)],
+            stops: [0, 0.45, 1],
           ),
         ),
       );
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-  final String text;
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Text(text.toUpperCase(),
-            style: const TextStyle(color: textDim, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-      );
-}
-
-class _Badge extends StatelessWidget {
-  const _Badge(this.text);
+class _Pill extends StatelessWidget {
+  const _Pill(this.icon, this.text);
+  final IconData icon;
   final String text;
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-        decoration: BoxDecoration(color: accentDim, borderRadius: BorderRadius.circular(4)),
-        child: Text(text, style: const TextStyle(color: accent, fontSize: 10.5, fontWeight: FontWeight.w600)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0x33000000),
+          border: Border.all(color: const Color(0x33FFFFFF)),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: accent),
+          const SizedBox(width: 6),
+          Text(text, style: const TextStyle(fontSize: 12, color: Color(0xE6FFFFFF))),
+        ]),
       );
 }
 
@@ -645,35 +648,32 @@ class _RecentTile extends StatefulWidget {
 class _RecentTileState extends State<_RecentTile> {
   bool hover = false;
   @override
-  Widget build(BuildContext context) => MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => hover = true),
-        onExit: (_) => setState(() => hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 120),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  border: Border.all(color: hover ? accent : borderColor),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Image.file(
-                  File(widget.path),
-                  fit: BoxFit.cover,
-                  cacheWidth: 360,
-                  filterQuality: FilterQuality.medium,
-                  errorBuilder: (_, _, _) => const Icon(Icons.image_outlined, color: textDim),
-                ),
+  Widget build(BuildContext context) => Tooltip(
+        message: p.basename(widget.path),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => hover = true),
+          onExit: (_) => setState(() => hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: 128,
+              decoration: BoxDecoration(
+                color: cardColor,
+                border: Border.all(color: hover ? accent : const Color(0x33FFFFFF), width: hover ? 1.5 : 1),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Image.file(
+                File(widget.path),
+                fit: BoxFit.cover,
+                cacheWidth: 300,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (_, _, _) => const Icon(Icons.image_outlined, color: textDim),
               ),
             ),
-            const SizedBox(height: 6),
-            Text(p.basename(widget.path),
-                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, color: textDim)),
-          ]),
+          ),
         ),
       );
 }

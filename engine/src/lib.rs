@@ -7,6 +7,7 @@
 pub mod adapt;
 pub mod analysis;
 pub mod color;
+pub mod cull;
 pub mod ffi;
 pub mod io;
 pub mod lut;

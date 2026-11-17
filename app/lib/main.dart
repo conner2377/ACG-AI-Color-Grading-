@@ -9,6 +9,46 @@ void main(List<String> args) {
   runApp(AcgApp(initialPhoto: photo));
 }
 
+ThemeData buildTheme(String? fontFamily) => ThemeData(
+  brightness: Brightness.dark,
+  fontFamily: fontFamily,
+  colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark).copyWith(
+    primary: accent,
+    onPrimary: onAccent,
+    surfaceContainerHighest: cardColor,
+    outline: borderColor,
+    outlineVariant: borderColor,
+    surface: surfaceColor,
+  ),
+  scaffoldBackgroundColor: bgColor,
+  dialogTheme: DialogThemeData(
+    backgroundColor: cardColor,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+  ),
+  chipTheme: ChipThemeData(
+    backgroundColor: cardColor,
+    selectedColor: accentDim,
+    side: const BorderSide(color: borderColor),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+    secondaryLabelStyle: const TextStyle(color: accent, fontWeight: FontWeight.w600),
+  ),
+  popupMenuTheme: PopupMenuThemeData(
+    color: cardColor,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+  ),
+  dividerColor: borderColor,
+  tooltipTheme: TooltipThemeData(
+    decoration: BoxDecoration(
+      color: cardColor,
+      border: Border.all(color: borderColor),
+      borderRadius: BorderRadius.circular(4),
+    ),
+    textStyle: const TextStyle(fontSize: 12, color: Colors.white),
+  ),
+  snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
+  useMaterial3: true,
+);
+
 class AcgApp extends StatelessWidget {
   const AcgApp({super.key, this.initialPhoto, this.initialTab = 0, this.fontFamily});
   final String? initialPhoto;
@@ -20,35 +60,7 @@ class AcgApp extends StatelessWidget {
     return MaterialApp(
       title: 'ACG - AI Color Grading',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        fontFamily: fontFamily,
-        colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark).copyWith(
-          primary: accent,
-          onPrimary: onAccent,
-          surfaceContainerHighest: cardColor,
-          outline: borderColor,
-          outlineVariant: borderColor,
-          surface: surfaceColor,
-        ),
-        scaffoldBackgroundColor: bgColor,
-        dialogTheme: DialogThemeData(backgroundColor: cardColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-        chipTheme: ChipThemeData(
-          backgroundColor: cardColor,
-          selectedColor: accentDim,
-          side: const BorderSide(color: borderColor),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-          secondaryLabelStyle: const TextStyle(color: accent, fontWeight: FontWeight.w600),
-        ),
-        popupMenuTheme: PopupMenuThemeData(color: cardColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-        dividerColor: borderColor,
-        tooltipTheme: TooltipThemeData(
-          decoration: BoxDecoration(color: cardColor, border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(4)),
-          textStyle: const TextStyle(fontSize: 12, color: Colors.white),
-        ),
-        snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
-        useMaterial3: true,
-      ),
+      theme: buildTheme(fontFamily),
       home: EditorPage(initialPhoto: initialPhoto, initialTab: initialTab),
     );
   }

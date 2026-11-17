@@ -31,6 +31,7 @@ typedef _AdaptN = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<U
 typedef _AiThumbN = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, Uint32);
 typedef _AiThumbD = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>, int);
 typedef _CubeN = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _Str2N = Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef _FreeN = Void Function(Pointer<Utf8>);
 typedef _FreeD = void Function(Pointer<Utf8>);
 
@@ -67,6 +68,8 @@ class _Lib {
   late final adaptLook = _l.lookupFunction<_AdaptN, _AdaptN>('acg_adapt_look');
   late final aiThumb = _l.lookupFunction<_AiThumbN, _AiThumbD>('acg_ai_thumbnail_b64');
   late final loadCube = _l.lookupFunction<_CubeN, _CubeN>('acg_load_cube');
+  late final cullMeasure = _l.lookupFunction<_Str2N, _Str2N>('acg_cull_measure');
+  late final cullGroup = _l.lookupFunction<_CubeN, _CubeN>('acg_cull_group');
   late final lastError = _l.lookupFunction<_StrN, _StrN>('acg_last_error');
   late final stringFree = _l.lookupFunction<_FreeN, _FreeD>('acg_string_free');
 
@@ -120,6 +123,24 @@ Future<Map<String, dynamic>> engineLoadCube(String path) => Isolate.run(() {
       final lib = _Lib();
       return using((arena) =>
           jsonDecode(lib.takeString(lib.loadCube(path.toNativeUtf8(allocator: arena)))) as Map<String, dynamic>);
+    });
+
+/// Photo organizer: measure photos (sharpness, motion, hash, capture time) on a
+/// background isolate. TIFF previews are written to [cacheDir].
+Future<Map<String, dynamic>> engineCullMeasure(List<String> paths, String? cacheDir) => Isolate.run(() {
+      final lib = _Lib();
+      return using((arena) => jsonDecode(lib.takeString(lib.cullMeasure(
+            jsonEncode(paths).toNativeUtf8(allocator: arena),
+            cacheDir == null ? nullptr : cacheDir.toNativeUtf8(allocator: arena),
+          ))) as Map<String, dynamic>);
+    });
+
+/// Photo organizer: group measured photos into bursts and pick the best frames.
+Future<List<Map<String, dynamic>>> engineCullGroup(List<Map<String, dynamic>> metrics) => Isolate.run(() {
+      final lib = _Lib();
+      return using((arena) => (jsonDecode(lib.takeString(lib.cullGroup(jsonEncode(metrics).toNativeUtf8(allocator: arena))))
+              as List)
+          .cast<Map<String, dynamic>>());
     });
 
 class EngineSession {

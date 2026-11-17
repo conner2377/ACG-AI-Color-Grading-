@@ -4,6 +4,7 @@
 //!   grade auto   <in> <outdir>          # analysis + style candidates
 //!   grade presets <in> <outdir>         # every built-in template
 //!   grade match  <in> <reference> <out> [strength]
+//!   grade cull   <dir>                 # photo organizer: bursts + best frames
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,27 @@ use photo_grade_engine::{analysis, apply, io, matching, presets, Recipe};
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("cull") if args.len() == 2 => {
+            let mut paths: Vec<String> = std::fs::read_dir(&args[1])?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| matches!(p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("jpg" | "jpeg" | "png" | "tif" | "tiff")))
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            paths.sort();
+            let (ms, errors) = photo_grade_engine::cull::measure_all(&paths, None);
+            for m in &ms {
+                println!("{:30} sharp {:6.2} bg {:6.2} motion {:.2} hash {}", Path::new(&m.path).file_name().unwrap().to_string_lossy(), m.subject_sharp, m.global_sharp, m.motion, m.hash);
+            }
+            for e in errors {
+                println!("error: {e}");
+            }
+            for (i, g) in photo_grade_engine::cull::group(ms).iter().enumerate() {
+                println!("group {i}");
+                for p in &g.items {
+                    println!("  {} {:?} {} keep={} score={:.2}", Path::new(&p.path).file_name().unwrap().to_string_lossy(), p.verdict, p.note, p.keep, p.score);
+                }
+            }
+        }
         Some("apply") if args.len() == 4 => {
             let img = io::load(&args[1])?;
             let recipe = match presets::by_name(&args[2]) {
