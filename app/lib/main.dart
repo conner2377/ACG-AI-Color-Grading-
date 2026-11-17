@@ -3,12 +3,17 @@ import 'package:flutter/material.dart';
 import 'ui/editor_page.dart';
 import 'ui/widgets.dart';
 
-void main() {
-  runApp(const AcgApp());
+void main(List<String> args) {
+  // A photo path may be passed on the command line ("Open with" / drag onto the icon).
+  final photo = args.where((a) => !a.startsWith('-')).firstOrNull;
+  runApp(AcgApp(initialPhoto: photo));
 }
 
 class AcgApp extends StatelessWidget {
-  const AcgApp({super.key});
+  const AcgApp({super.key, this.initialPhoto, this.initialTab = 0, this.fontFamily});
+  final String? initialPhoto;
+  final int initialTab;
+  final String? fontFamily;
 
   @override
   Widget build(BuildContext context) {
@@ -17,11 +22,26 @@ class AcgApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark),
-        scaffoldBackgroundColor: const Color(0xFF0B0B0B),
+        fontFamily: fontFamily,
+        colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark).copyWith(
+          primary: accent,
+          onPrimary: Colors.black87,
+          surface: surfaceColor,
+        ),
+        scaffoldBackgroundColor: bgColor,
+        dialogTheme: DialogThemeData(backgroundColor: cardColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))),
+        chipTheme: ChipThemeData(
+          backgroundColor: cardColor,
+          selectedColor: accent,
+          side: BorderSide.none,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          secondaryLabelStyle: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
+        ),
+        popupMenuTheme: PopupMenuThemeData(color: cardColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+        snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
         useMaterial3: true,
       ),
-      home: const EditorPage(),
+      home: EditorPage(initialPhoto: initialPhoto, initialTab: initialTab),
     );
   }
 }

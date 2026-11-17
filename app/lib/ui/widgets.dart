@@ -3,9 +3,16 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-const accent = Color(0xFF4DA3FF);
+// Design tokens: warm, soft and simple.
+const accent = Color(0xFFFFA36C);
+const accent2 = Color(0xFFFF6F91);
+const accentGradient = LinearGradient(colors: [accent, accent2]);
+const bgColor = Color(0xFF0E0E11);
+const surfaceColor = Color(0xFF16161B);
+const cardColor = Color(0xFF1F1F26);
+const textDim = Color(0xFF9A9AA6);
 
-/// Lightroom-style labeled slider. Double-tap the label to reset.
+/// Labeled slider. Double-tap the label to reset.
 class AdjustSlider extends StatelessWidget {
   const AdjustSlider({
     super.key,
@@ -31,13 +38,15 @@ class AdjustSlider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final shown = display?.call(value) ?? (value * 100).round().toString();
+    final bipolar = track == null && reset > min && reset < max;
     final slider = SliderTheme(
       data: SliderTheme.of(context).copyWith(
-        trackHeight: 2,
-        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+        trackHeight: 4,
+        trackShape: const RoundedRectSliderTrackShape(),
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8, elevation: 2),
         overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-        activeTrackColor: track == null ? accent : Colors.transparent,
-        inactiveTrackColor: track == null ? Colors.white24 : Colors.transparent,
+        activeTrackColor: track == null && !bipolar ? accent : Colors.transparent,
+        inactiveTrackColor: track == null && !bipolar ? Colors.white12 : Colors.transparent,
         thumbColor: Colors.white,
       ),
       child: Slider(
@@ -49,7 +58,7 @@ class AdjustSlider extends StatelessWidget {
       ),
     );
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -63,7 +72,11 @@ class AdjustSlider extends StatelessWidget {
               child: Row(children: [
                 Text(label, style: const TextStyle(fontSize: 13, color: Colors.white70)),
                 const Spacer(),
-                Text(shown, style: const TextStyle(fontSize: 13, color: Colors.white, fontFeatures: [ui.FontFeature.tabularFigures()])),
+                Text(shown,
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: (value - reset).abs() < 1e-6 ? textDim : accent,
+                        fontFeatures: const [ui.FontFeature.tabularFigures()])),
               ]),
             ),
           ),
@@ -76,12 +89,43 @@ class AdjustSlider extends StatelessWidget {
               ),
               slider,
             ])
+          else if (bipolar)
+            // Two-sided sliders fill from the middle toward the thumb.
+            Stack(alignment: Alignment.center, children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: CustomPaint(
+                  size: const Size(double.infinity, 4),
+                  painter: _CenterFillPainter((value.clamp(min, max) - min) / (max - min), (reset.clamp(min, max) - min) / (max - min)),
+                ),
+              ),
+              slider,
+            ])
           else
             slider,
         ],
       ),
     );
   }
+}
+
+class _CenterFillPainter extends CustomPainter {
+  _CenterFillPainter(this.t, this.origin);
+  final double t, origin;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = Radius.circular(size.height / 2);
+    canvas.drawRRect(RRect.fromRectAndRadius(Offset.zero & size, r), Paint()..color = Colors.white12);
+    final a = origin * size.width, b = t * size.width;
+    if ((a - b).abs() > 0.5) {
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(Rect.fromLTRB(a < b ? a : b, 0, a < b ? b : a, size.height), r), Paint()..color = accent);
+    }
+    canvas.drawRect(Rect.fromLTWH(a - 1, -2, 2, size.height + 4), Paint()..color = Colors.white30);
+  }
+
+  @override
+  bool shouldRepaint(_CenterFillPainter old) => old.t != t || old.origin != origin;
 }
 
 const hueGradient = LinearGradient(colors: [
@@ -293,4 +337,170 @@ class _HistPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HistPainter old) => old.h != h;
+}
+
+
+/// Big look card: photo preview with the name over a soft gradient and a heart.
+class LookCard extends StatelessWidget {
+  const LookCard({
+    super.key,
+    required this.label,
+    this.subtitle,
+    this.image,
+    this.selected = false,
+    this.favorite,
+    this.onTap,
+    this.onFavorite,
+    this.onDelete,
+  });
+  final String label;
+  final String? subtitle;
+  final ui.Image? image;
+  final bool selected;
+  final bool? favorite;
+  final VoidCallback? onTap;
+  final VoidCallback? onFavorite;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final card = AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: selected ? accentGradient : null,
+        color: selected ? null : Colors.transparent,
+      ),
+      padding: const EdgeInsets.all(2.5),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Stack(fit: StackFit.expand, children: [
+          Container(color: cardColor),
+          if (image != null) RawImage(image: image, fit: BoxFit.cover, filterQuality: FilterQuality.medium),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Colors.transparent, Color(0xCC000000)],
+                stops: [0, 0.55, 1],
+              ),
+            ),
+          ),
+          Positioned(
+            left: 10,
+            right: 10,
+            bottom: 8,
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+          ),
+          if (favorite != null)
+            Positioned(
+              top: 2,
+              right: 2,
+              child: IconButton(
+                visualDensity: VisualDensity.compact,
+                iconSize: 18,
+                onPressed: onFavorite,
+                icon: Icon(favorite! ? Icons.favorite : Icons.favorite_border,
+                    color: favorite! ? accent2 : Colors.white70,
+                    shadows: const [Shadow(blurRadius: 6, color: Colors.black54)]),
+              ),
+            ),
+          if (onDelete != null)
+            Positioned(
+              top: 2,
+              left: 2,
+              child: IconButton(
+                visualDensity: VisualDensity.compact,
+                iconSize: 16,
+                tooltip: '삭제',
+                onPressed: onDelete,
+                icon: const Icon(Icons.close, color: Colors.white70, shadows: [Shadow(blurRadius: 6, color: Colors.black54)]),
+              ),
+            ),
+        ]),
+      ),
+    );
+    return Tooltip(
+      message: subtitle ?? '',
+      waitDuration: const Duration(milliseconds: 500),
+      child: MouseRegion(cursor: SystemMouseCursors.click, child: GestureDetector(onTap: onTap, child: card)),
+    );
+  }
+}
+
+/// Collapsible rounded section used in the adjust tab.
+class SectionCard extends StatelessWidget {
+  const SectionCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.open,
+    required this.onToggle,
+    required this.children,
+    this.trailing,
+  });
+  final IconData icon;
+  final String title;
+  final bool open;
+  final VoidCallback onToggle;
+  final List<Widget> children;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onToggle,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
+              child: Row(children: [
+                Icon(icon, size: 20, color: accent),
+                const SizedBox(width: 10),
+                Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                ?trailing,
+                Icon(open ? Icons.expand_less : Icons.expand_more, color: textDim),
+              ]),
+            ),
+          ),
+          if (open) ...children,
+          if (open) const SizedBox(height: 10),
+        ]),
+      );
+}
+
+/// Pill button filled with the accent gradient.
+class GradientButton extends StatelessWidget {
+  const GradientButton({super.key, required this.label, this.icon, this.onPressed});
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onPressed;
+  @override
+  Widget build(BuildContext context) => Opacity(
+        opacity: onPressed == null ? 0.4 : 1,
+        child: Material(
+          color: Colors.transparent,
+          child: Ink(
+            decoration: BoxDecoration(gradient: accentGradient, borderRadius: BorderRadius.circular(24)),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(24),
+              onTap: onPressed,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (icon != null) ...[Icon(icon, size: 18, color: Colors.black87), const SizedBox(width: 6)],
+                  Text(label, style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
 }

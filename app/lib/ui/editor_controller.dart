@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -71,6 +72,77 @@ class EditorController extends ChangeNotifier {
 
   void touch() => notifyListeners();
 
+  /// Before/after split view: the original shows left of the divider.
+  bool compareSplit = false;
+  double splitPos = 0.5;
+  String _originalGeoKey = '';
+
+  /// Favorite look names (built-in templates and my looks).
+  Set<String> favorites = {};
+
+  Future<void> loadFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    favorites = (prefs.getStringList('favorites') ?? []).toSet();
+    notifyListeners();
+  }
+
+  Future<void> toggleFavorite(String name) async {
+    if (!favorites.remove(name)) favorites.add(name);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('favorites', favorites.toList());
+  }
+
+  /// Drop the active look and go back to the state before it.
+  void clearLook() {
+    final from = _blendFrom;
+    if (from == null) return;
+    recipe = withGeometryOf(from, recipe);
+    _blendFrom = _blendTo = null;
+    activeTemplate = null;
+    _scheduleRender();
+    commitHistory();
+    notifyListeners();
+  }
+
+  /// Export many photos with the current look. With [perPhotoBase] each photo first
+  /// gets its own histogram baseline and then the active built-in look at the current
+  /// strength; otherwise the exact current values are reused. Returns files written.
+  Future<int> batchExport(List<String> paths, String outDir, String ext, int quality,
+      {required bool perPhotoBase, void Function(int done)? onProgress}) async {
+    final style = perPhotoBase ? activePreset : null;
+    final same = withGeometryOf(recipe, emptyRecipe());
+    var done = 0;
+    for (final p in paths) {
+      final s = await EngineSession.open(p, previewSize: 1024);
+      try {
+        var r = same;
+        if (style != null) {
+          final res = await s.autoCandidates();
+          final cands = (res['candidates'] as List).cast<Map<String, dynamic>>();
+          final base = cands.isEmpty ? emptyRecipe() : cands.first;
+          r = blendRecipe(base, layerRecipe(base, style), templateAmount);
+        }
+        final name = p.split(RegExp(r'[\\/]')).last.replaceAll(RegExp(r'\.[^.]+$'), '');
+        await s.export(r, '$outDir${Platform.pathSeparator}${name}_ACG.$ext', jpegQuality: quality);
+        done++;
+        onProgress?.call(done);
+      } finally {
+        await s.close();
+      }
+    }
+    return done;
+  }
+
+  /// The built-in look currently applied, if any.
+  Map<String, dynamic>? get activePreset {
+    if (_blendTo == null || activeTemplate == null) return null;
+    for (final p in enginePresets()) {
+      if (p['name'] == activeTemplate) return p;
+    }
+    return null;
+  }
+
   bool get hasPhoto => session != null;
   bool get canUndo => _hIndex > 0;
   bool get canRedo => _hIndex < _history.length - 1;
@@ -99,6 +171,7 @@ class EditorController extends ChangeNotifier {
       cropAspectLabel = '자유';
       original = await frameToImage(await session!.renderPreview(emptyRecipe()));
       preview = original;
+      _originalGeoKey = jsonEncode(withGeometryOf(emptyRecipe(), emptyRecipe()));
       histogram = null;
       _scheduleRender();
       error = null;
@@ -259,6 +332,13 @@ class EditorController extends ChangeNotifier {
       while (_dirty && session != null) {
         _dirty = false;
         final r = cropping ? (cloneRecipe(recipe)..remove('crop')) : recipe;
+        final geo = withGeometryOf(emptyRecipe(), r);
+        final geoKey = jsonEncode(geo);
+        if (geoKey != _originalGeoKey) {
+          // Keep the "before" image framed like the edit so compare lines up.
+          original = await frameToImage(await session!.renderPreview(geo));
+          _originalGeoKey = geoKey;
+        }
         final frame = await session!.renderPreview(r);
         histogram = _histogram(frame);
         preview = await frameToImage(frame);

@@ -212,6 +212,7 @@ class CropPanel extends StatelessWidget {
         child: Wrap(spacing: 6, runSpacing: 6, children: [
           for (final k in ratios.keys)
             ChoiceChip(
+              showCheckmark: false,
               label: Text(k, style: const TextStyle(fontSize: 12)),
               selected: c.cropAspectLabel == k,
               onSelected: (_) => _setRatio(k),
@@ -260,7 +261,7 @@ class CropPanel extends StatelessWidget {
       const Padding(
         padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
         child: Text('사진 위 모서리를 끌어 크기를, 안쪽을 끌어 위치를 바꿉니다. 다른 도구로 가면 잘린 결과가 보여요.',
-            style: TextStyle(color: Colors.white38, fontSize: 12)),
+            style: TextStyle(color: textDim, fontSize: 12)),
       ),
     ]);
   }

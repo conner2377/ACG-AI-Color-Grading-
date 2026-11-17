@@ -142,8 +142,11 @@ pub fn analyze(img: &Image) -> Stats {
     };
     s.scene = if s.p50 < 0.18 && s.p95 < 0.7 {
         Scene::Night
-    } else if s.skin_fraction > 0.08 {
+    } else if s.skin_fraction > 0.08 && s.skin_fraction < 0.45 {
         Scene::Portrait
+    } else if s.skin_fraction >= 0.45 {
+        // Frames dominated by skin-like colors (wood, coffee, fur, sand): no specific scene.
+        Scene::General
     } else if s.warm_fraction > 0.25 && s.p50 < 0.55 {
         Scene::Sunset
     } else if s.green_fraction + s.blue_fraction > 0.35 {
