@@ -10,9 +10,11 @@ pub mod color;
 pub mod cull;
 pub mod ffi;
 pub mod io;
+pub mod local;
 pub mod lut;
 pub mod matching;
 pub mod pipeline;
+pub mod polish;
 pub mod presets;
 pub mod recipe;
 

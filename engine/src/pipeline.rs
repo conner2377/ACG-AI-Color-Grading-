@@ -118,7 +118,8 @@ fn lookup(lut: &[f32], v: f32) -> f32 {
     lut[i] + (lut[i + 1] - lut[i]) * f
 }
 
-/// Tone response for the Light panel (exposure is applied separately in linear).
+/// Global tone response for the Light panel: black/white points and contrast
+/// (exposure is applied in linear; shadows/highlights are local, see `sh_lut`).
 fn tone_lut(r: &Recipe, n: usize) -> Vec<f32> {
     let bp = -r.blacks * 0.08;
     let wp = 1.0 - r.whites * 0.15;
@@ -127,15 +128,67 @@ fn tone_lut(r: &Recipe, n: usize) -> Vec<f32> {
             let g = j as f32 / (n - 1) as f32;
             let mut x = (g - bp) / (wp - bp).max(0.05);
             let xc = x.clamp(0.0, 1.0);
-            // Shadows act on the lower third, highlights on the upper third.
-            let s_mask = xc * (1.0 - xc) * (1.0 - xc) * 6.75;
-            let h_mask = xc * xc * (1.0 - xc) * 6.75;
-            x += r.shadows * 0.25 * s_mask + r.highlights * 0.25 * h_mask;
-            let xc = x.clamp(0.0, 1.0);
             x += r.contrast * 0.6 * (xc - 0.5) * 4.0 * xc * (1.0 - xc);
             x.clamp(0.0, 1.0)
         })
         .collect()
+}
+
+/// Shadows / highlights as a lightness offset looked up from the LOCAL base lightness
+/// (edge-aware), so lifting shadows opens dark areas without flattening their detail
+/// and pulling highlights keeps clouds and skin texture instead of turning them grey.
+fn sh_lut(r: &Recipe, n: usize) -> Option<Vec<f32>> {
+    if r.shadows == 0.0 && r.highlights == 0.0 {
+        return None;
+    }
+    Some(
+        (0..n)
+            .map(|j| {
+                let x = j as f32 / (n - 1) as f32;
+                // Shadows act on the lower part, highlights on the upper part.
+                let s_mask = x * (1.0 - x) * (1.0 - x) * 6.75;
+                let h_mask = x * x * (1.0 - x) * 6.75;
+                // Lifting deep blacks is held back a little so they don't go grey.
+                let s_amt = if r.shadows > 0.0 { r.shadows * 0.3 * smoothstep(0.0, 0.12, x).max(0.35) } else { r.shadows * 0.25 };
+                let h_amt = r.highlights * 0.3;
+                s_amt * s_mask + h_amt * h_mask
+            })
+            .collect(),
+    )
+}
+
+/// Max in-gamut OKLab chroma for lightness `l` along the hue direction (ca, sa).
+fn max_chroma(l: f32, ca: f32, sa: f32) -> f32 {
+    let ok = |c: f32| oklab_to_linear([l, ca * c, sa * c]).iter().all(|&x| (-1e-4..=1.0 + 1e-4).contains(&x));
+    let (mut lo, mut hi) = (0.0f32, 0.5f32);
+    for _ in 0..10 {
+        let mid = (lo + hi) * 0.5;
+        if ok(mid) { lo = mid } else { hi = mid }
+    }
+    lo
+}
+
+/// OKLab -> display sRGB with soft gamut compression: chroma that edits ADDED beyond
+/// what the photo had is rolled off smoothly toward the gamut edge, so boosted colors keep
+/// their gradation instead of flattening into a solid patch.
+#[inline]
+fn soft_gamut(l: f32, a: f32, b: f32, c_before: f32) -> Rgb {
+    let c = (a * a + b * b).sqrt();
+    if c > 0.03 && l > 0.0 && l < 1.0 {
+        let (ca, sa) = (a / c, b / c);
+        // Cheap reject: comfortably inside the gamut.
+        let inside = oklab_to_linear([l, a * 1.25, b * 1.25]).iter().all(|&x| (0.0..=1.0).contains(&x));
+        if !inside {
+            let cmax = max_chroma(l, ca, sa);
+            let knee = (cmax * 0.8).max(c_before.min(cmax));
+            if c > knee && cmax > knee + 1e-4 {
+                let room = cmax - knee;
+                let nc = knee + room * ((c - knee) / room).tanh();
+                return oklab_to_linear_gamut([l, ca * nc, sa * nc]).map(linear_to_srgb);
+            }
+        }
+    }
+    oklab_to_linear_gamut([l, a, b]).map(linear_to_srgb)
 }
 
 /// Separable box blur (3 passes ≈ Gaussian) of a single-channel buffer.
@@ -398,6 +451,40 @@ fn band_weights(h: f32) -> [(usize, f32); 2] {
     [(0, 1.0), (1, 0.0)]
 }
 
+/// Dehaze with the dark-channel prior (He et al.): estimate the haze veil from the
+/// darkest channel, refine it edge-aware, and remove it. Negative amounts add haze.
+fn dehaze(lin: &mut [Rgb], w: usize, h: usize, amount: f32) {
+    let dark: Vec<f32> = lin.par_iter().map(|c| c[0].min(c[1]).min(c[2]).min(1.0)).collect();
+    // Airlight: average color of the haziest 0.2% pixels.
+    let mut idx: Vec<usize> = (0..dark.len()).collect();
+    let top = (dark.len() / 500).max(1);
+    idx.select_nth_unstable_by(top - 1, |&a, &b| dark[b].total_cmp(&dark[a]));
+    let mut air = [0.0f32; 3];
+    for &i in &idx[..top] {
+        for k in 0..3 {
+            air[k] += lin[i][k].min(1.0) / top as f32;
+        }
+    }
+    let air = air.map(|v| v.clamp(0.4, 1.0));
+    let dn: Vec<f32> = lin.par_iter().map(|c| (0..3).map(|k| c[k] / air[k]).fold(f32::MAX, f32::min).clamp(0.0, 1.0)).collect();
+    // Local minimum is approximated by an edge-aware smooth of the dark channel.
+    let veil = crate::local::guided(&dn, w, h, (w.max(h) / 80).max(2), 0.002);
+    lin.par_iter_mut().zip(veil.par_iter()).for_each(|(c, &v)| {
+        let v = v.clamp(0.0, 1.0);
+        if amount > 0.0 {
+            let t = (1.0 - amount.min(1.0) * 0.8 * v).max(0.3);
+            for k in 0..3 {
+                c[k] = ((c[k] - air[k]) / t + air[k]).max(0.0);
+            }
+        } else {
+            let k_add = -amount.max(-1.0) * 0.6 * (0.4 + 0.6 * (1.0 - v));
+            for k in 0..3 {
+                c[k] += (air[k] * 0.9 - c[k]) * k_add;
+            }
+        }
+    });
+}
+
 // ---------------------------------------------------------------- main pipeline
 
 /// Apply a recipe to a linear image, returning a display-encoded image in 0..1.
@@ -415,6 +502,7 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
     };
     let (w, h) = (input.width, input.height);
     let tone = tone_lut(r, 4096);
+    let sh = sh_lut(r, 1024);
     let curve = curve_lut(&r.curve, 1024);
     let curves_rgb = [curve_lut(&r.curve_r, 1024), curve_lut(&r.curve_g, 1024), curve_lut(&r.curve_b, 1024)];
 
@@ -427,7 +515,6 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
     let wl = luma(wb);
     wb = [wb[0] / wl, wb[1] / wl, wb[2] / wl];
     let gain = 2f32.powf(r.exposure);
-    let haze = r.dehaze * 0.06;
     let matrix = match (r.channel_mixer, calibration_matrix(r)) {
         (Some(m), Some(c)) => Some(mat_mul(m, c)),
         (Some(m), None) => Some(m),
@@ -448,15 +535,15 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
                 c = [y, y, y];
             }
             for v in c.iter_mut() {
-                *v *= gain;
-                if haze != 0.0 {
-                    *v = (*v - haze) / (1.0 - haze);
-                }
-                *v = v.max(0.0);
+                *v = (*v * gain).max(0.0);
             }
             c
         })
         .collect();
+
+    if r.dehaze != 0.0 {
+        dehaze(&mut lin, w, h, r.dehaze);
+    }
 
     // Film halation / bloom: glow from highlights, computed in linear light.
     if r.halation > 0.0 || r.bloom > 0.0 {
@@ -517,17 +604,25 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
             });
         }
     }
-    if r.clarity != 0.0 || r.dehaze != 0.0 || r.texture != 0.0 {
+    if r.clarity != 0.0 || r.texture != 0.0 {
         let lum: Vec<f32> = out.par_iter().map(|&c| luma(c)).collect();
-        let big = if r.clarity != 0.0 || r.dehaze != 0.0 { blur(&lum, w, h, (w.max(h) / 60).max(2)) } else { Vec::new() };
+        // Clarity: midtone local contrast against an edge-aware base (no halos).
+        let big = if r.clarity != 0.0 { crate::local::guided(&lum, w, h, (w.max(h) / 60).max(2), 0.006) } else { Vec::new() };
         let small = if r.texture != 0.0 { blur(&lum, w, h, (w.max(h) / 500).max(1)) } else { Vec::new() };
-        let amt = r.clarity * 0.8 + r.dehaze * 0.3;
+        let amt = r.clarity * 0.9;
+        let skin_k = r.skin_protect.clamp(0.0, 1.0);
         out.par_iter_mut().enumerate().for_each(|(i, c)| {
             let l = lum[i];
             let mut d = 0.0;
             if !big.is_empty() {
                 let mid = 1.0 - (2.0 * l - 1.0).powi(2);
-                d += (l - big[i]) * amt * mid;
+                let mut k = amt * mid;
+                // Positive clarity is gentler on skin (pores and wrinkles stay soft).
+                if k > 0.0 && skin_k > 0.0 {
+                    let lab = linear_to_oklab(c.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
+                    k *= 1.0 - skin_weight(lab) * skin_k * 0.7;
+                }
+                d += (l - big[i]) * k;
             }
             if !small.is_empty() {
                 d += (l - small[i]) * r.texture * 1.2;
@@ -551,9 +646,19 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
     let fade = r.fade * 0.12;
     let diag = ((w * w + h * h) as f32).sqrt() * 0.5;
     let lut_s = r.lut_strength.clamp(0.0, 1.5);
-    let sat_boost = if r.dehaze > 0.0 { r.dehaze * 0.15 } else { r.dehaze * 0.3 };
+    let sat_boost = if r.dehaze > 0.0 { r.dehaze * 0.1 } else { r.dehaze * 0.3 };
     let skin_k = r.skin_protect.clamp(0.0, 1.0);
     let balance = r.grade_balance.clamp(-1.0, 1.0) * 0.25;
+    // Local base lightness for shadows/highlights (edge-aware, so no halos).
+    let sh_base: Vec<f32> = if sh.is_some() {
+        let l0: Vec<f32> = out
+            .par_iter()
+            .map(|c| linear_to_oklab(c.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))))[0].clamp(0.0, 1.0))
+            .collect();
+        crate::local::guided(&l0, w, h, (w.max(h) / 40).max(2), 0.012)
+    } else {
+        Vec::new()
+    };
 
     out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         for (x, c) in row.iter_mut().enumerate() {
@@ -563,7 +668,11 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
 
             // Tone on OKLab lightness; chroma follows so saturation stays consistent.
             let l0 = lab0[0].clamp(0.0, 1.0);
-            let mut l1 = lookup(&tone, l0);
+            let mut l1 = l0;
+            if let Some(shl) = &sh {
+                l1 = (l1 + lookup(shl, sh_base[y * w + x])).clamp(0.0, 1.0);
+            }
+            l1 = lookup(&tone, l1);
             if let Some(cv) = &curve {
                 l1 = lookup(cv, l1);
             }
@@ -582,6 +691,7 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
             let s = if s_raw > 1.0 { 1.0 + (s_raw - 1.0) * (1.0 - skin * 0.7) } else { s_raw };
             a *= s;
             b *= s;
+            let c_before = chroma * ratio;
             let based = [l1, a, b];
             let mut l = l1;
 
@@ -620,7 +730,7 @@ pub fn apply(r: &Recipe, input: &Image) -> Image {
                 b += (based[2] - b) * skin;
             }
 
-            let mut p = oklab_to_linear_gamut([l, a, b]).map(linear_to_srgb);
+            let mut p = soft_gamut(l, a, b, c_before);
 
             for k in 0..3 {
                 if let Some(cl) = &curves_rgb[k] {

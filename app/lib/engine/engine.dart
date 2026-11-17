@@ -66,6 +66,7 @@ class _Lib {
   late final presets = _l.lookupFunction<_StrN, _StrN>('acg_presets');
   late final matchReference = _l.lookupFunction<_MatchN, _MatchD>('acg_match_reference');
   late final adaptLook = _l.lookupFunction<_AdaptN, _AdaptN>('acg_adapt_look');
+  late final polish = _l.lookupFunction<_AdaptN, _AdaptN>('acg_polish');
   late final aiThumb = _l.lookupFunction<_AiThumbN, _AiThumbD>('acg_ai_thumbnail_b64');
   late final loadCube = _l.lookupFunction<_CubeN, _CubeN>('acg_load_cube');
   late final cullMeasure = _l.lookupFunction<_Str2N, _Str2N>('acg_cull_measure');
@@ -214,6 +215,14 @@ class EngineSession {
     final b = jsonEncode(base), l = jsonEncode(look);
     return _run((lib, a) => using((arena) => jsonDecode(lib.takeString(lib.adaptLook(
         Pointer.fromAddress(a), b.toNativeUtf8(allocator: arena), l.toNativeUtf8(allocator: arena)))) as Map<String, dynamic>));
+  }
+
+  /// Finishing check for an automatic edit: fixes clipped highlights, crushed shadows,
+  /// over-saturated colors and unnatural skin. Returns {recipe, notes}.
+  Future<Map<String, dynamic>> polish(Map<String, dynamic> recipe, Map<String, dynamic>? base) {
+    final r = jsonEncode(recipe), b = base == null ? '' : jsonEncode(base);
+    return _run((lib, a) => using((arena) => jsonDecode(lib.takeString(lib.polish(
+        Pointer.fromAddress(a), r.toNativeUtf8(allocator: arena), b.toNativeUtf8(allocator: arena)))) as Map<String, dynamic>));
   }
 
   /// Small JPEG (base64) of the photo with [recipe] applied, for AI requests.

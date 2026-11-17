@@ -349,3 +349,22 @@ pub unsafe extern "C" fn acg_cull_group(metrics_json: *const c_char) -> *mut c_c
     };
     out_string(serde_json::to_string(&crate::cull::group(ms)).unwrap_or_default())
 }
+
+/// Finishing check for an automatic edit (see `polish`): fixes clipped highlights,
+/// crushed shadows, over-saturated colors and unnatural skin. `base_json` is the
+/// physical baseline the edit was built on (may be empty).
+/// Returns `{"recipe": …, "notes": ["…"]}`.
+/// # Safety
+/// `s` live; strings valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn acg_polish(s: *const Session, recipe_json: *const c_char, base_json: *const c_char) -> *mut c_char {
+    let s = &*s;
+    let r = match parse_recipe(recipe_json) { Ok(r) => r, Err(e) => { set_error(e); return std::ptr::null_mut() } };
+    let base = match in_str(base_json) {
+        Some(b) if !b.trim().is_empty() => match Recipe::from_json(b) { Ok(b) => Some(b), Err(e) => { set_error(e); return std::ptr::null_mut() } },
+        _ => None,
+    };
+    let stats = analysis::analyze(&s.preview);
+    let (out, notes) = crate::polish::polish(&r, base.as_ref(), &s.preview, &stats);
+    out_string(serde_json::json!({ "recipe": out, "notes": notes }).to_string())
+}

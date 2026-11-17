@@ -108,8 +108,8 @@ Reply with ONE JSON object and nothing else:
   ]
 }
 
-Return EXACTLY 3 variations of the same direction: #1 your best edit, #2 a bolder take,
-#3 a subtler, more natural take. All keys except name/reason/adjust are optional; omit
+Return EXACTLY 3 variations of the same direction: #1 your best edit, #2 a more styled take
+(still clean, the kind a magazine would print), #3 a subtler, more natural take. All keys except name/reason/adjust are optional; omit
 what you don't change.
 
 Limits:
@@ -121,14 +121,31 @@ Limits:
 - grade_*: hue 0..360, sat 0..1 (0.05-0.25 is already visible). Absolute values.
 - curve: 3-6 points [x,y] in 0..1, gentle; it multiplies with contrast, so don't double up.
 
-Taste:
-- Correct problems first, then style. A harmonious, believable photo beats a filter.
-- Keep skin natural (orange band hue within ±8, sat within ±0.2) unless asked otherwise;
-  the editor also protects skin automatically.
+How a professional finishes a photo (follow this):
+- Correct problems first, then style. A clean, believable photo beats a filter. Most great
+  edits are made of a few moderate moves, not many strong ones.
+- Light: set exposure so the subject sits right, then use whites/blacks to set clean end
+  points and highlights/shadows to recover detail. Shadows/highlights are local
+  (edge-aware) in this editor, so they keep texture; contrast and curve are global.
+- Don't stack contrast tools: pick contrast OR an S-curve as the main one; clarity and
+  dehaze are seasoning (|clarity| <= 0.3, dehaze <= 0.3 unless the photo is truly hazy).
+- Color: fix the white balance so whites and greys are neutral (unless the mood is warm or
+  cool on purpose). Prefer vibrance over saturation. Use HSL to fix specific colors
+  (skies, foliage, distracting neon) instead of raising global saturation.
+- Grading: 0.05-0.2 saturation is plenty; complementary pairs (cool shadows / warm
+  highlights) read as cinematic, same-hue pairs read as a tint. Keep skin out of the way.
+- Skin: natural, healthy, never orange, grey or magenta (orange band hue within ±8, sat
+  within ±0.2) unless asked otherwise; the editor also protects skin automatically.
+- Effects (grain, halation, bloom, fade, vignette) only when the user's mood calls for them
+  (film, vintage, dreamy...). For "just make it look its best", leave them at 0 (a light
+  vignette up to -0.15 is fine).
 - Watch the statistics: don't push highlights that are already near clipping, and don't
-  crush shadows that are already dark.
+  crush shadows that are already dark. The editor checks the result and pulls back clipped
+  highlights, crushed blacks and over-saturated colors, so aim for the look, not extremes.
 - If the user asks for a mood (film, cinematic, infrared, flash, warm, moody), commit to it
-  with these tools; when they ask for nothing specific, make the photo look its best.
+  with these tools.
+- Before answering, picture the result: would a professional retoucher sign it? If it would
+  look overdone, muddy, flat or color-cast, reduce it.
 ''';
 
 const _refinePrompt = '''
@@ -278,7 +295,7 @@ class AiService {
           ]
         }
       ],
-      'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.7},
+      'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.4},
     };
     final r = await http
         .post(uri, headers: {'content-type': 'application/json', 'x-goog-api-key': settings.apiKey}, body: jsonEncode(body))

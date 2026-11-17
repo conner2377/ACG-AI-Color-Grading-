@@ -618,7 +618,7 @@ class EditorController extends ChangeNotifier {
         }
         r = matched;
       }
-      recipes.add(r);
+      recipes.add(await _finishAi(r, base, cleanOnly: request.trim().isEmpty && guideText == null && referencePath == null));
     }
     aiRequest = request;
     aiRound = 1;
@@ -646,7 +646,8 @@ class EditorController extends ChangeNotifier {
       followUp: followUp,
     );
     final v = plan.variations.first;
-    final r = v.toRecipe(current);
+    var r = v.toRecipe(current);
+    r = await _finishAi(r, base, cleanOnly: aiRequest.trim().isEmpty && followUp.trim().isEmpty);
     aiRound++;
     final label = followUp.trim().isEmpty ? '다듬기' : followUp.trim();
     r['name'] = '$aiRound차 · ${label.length > 14 ? '${label.substring(0, 14)}…' : label}';
@@ -655,6 +656,39 @@ class EditorController extends ChangeNotifier {
     aiThumbs = [...thumbs, ...aiThumbs];
     if (plan.analysis.isNotEmpty) aiAnalysis = plan.analysis;
     pickAiVariation(r);
+  }
+
+  /// Finishing pass on an AI edit, like a retoucher's last check: with no specific mood
+  /// requested, effects that make a photo look processed (grain, glow, heavy matte,
+  /// strong vignette, crunchy clarity) are kept to clean amounts; then the engine renders
+  /// it and fixes clipped highlights, crushed shadows, over-saturated colors and skin.
+  Future<Map<String, dynamic>> _finishAi(Map<String, dynamic> r, Map<String, dynamic> base, {required bool cleanOnly}) async {
+    final s = session;
+    if (s == null) return r;
+    var out = cloneRecipe(r);
+    if (cleanOnly) {
+      const caps = {'grain': 0.0, 'halation': 0.0, 'bloom': 0.0, 'fade': 0.08, 'clarity': 0.35, 'texture': 0.3, 'dehaze': 0.3, 'sharpen': 0.3};
+      caps.forEach((k, max) {
+        if (getVal(out, k) > max) out[k] = max;
+      });
+      if (getVal(out, 'vignette') < -0.2) out['vignette'] = -0.2;
+    }
+    try {
+      final res = await s.polish(out, base);
+      final fixed = (res['recipe'] as Map).cast<String, dynamic>();
+      final notes = (res['notes'] as List?)?.cast<String>() ?? const [];
+      for (final k in ['name', 'category', 'description']) {
+        fixed[k] = r[k];
+      }
+      if (notes.isNotEmpty) {
+        final d = (r['description'] as String?) ?? '';
+        fixed['description'] = '${d.isEmpty ? '' : '$d\n'}마무리: ${notes.join(' ')}';
+      }
+      out = fixed;
+    } catch (_) {
+      // The check is a refinement; the AI edit is still valid without it.
+    }
+    return out;
   }
 
   Future<void> _showAi(String analysis, List<Map<String, dynamic>> recipes, Map<String, dynamic> base) async {
