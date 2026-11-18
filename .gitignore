@@ -33,3 +33,14 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Rust
+target/
+
+# Flutter
+.dart_tool/
+.flutter-plugins*
+.pub-cache/
+
+# Build output
+dist/
